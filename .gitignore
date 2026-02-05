@@ -1,0 +1,20 @@
+# --- Build / Dist 目录 ---
+*.build/
+*.dist/
+*.onefile-build/
+# --- Python ---
+__pycache__/
+*.py[cod]
+
+# --- Versioned output directories ---
+*v*.*.*/
+
+# --- Temp Files ---
+*.xml
+*.log
+*.tmp
+*.bak
+*.exe
+*.bat
+# --- Tests ---
+tests/

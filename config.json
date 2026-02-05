@@ -1,0 +1,32 @@
+{
+  "plot": {
+    "title": {
+      "fontsize": 20,
+      "bold": true
+    },
+    "xlabel": {
+      "fontsize": 14,
+      "bold": false
+    },
+    "ylabel": {
+      "fontsize": 14,
+      "bold": false
+    },
+    "xtick": {
+      "fontsize": 10,
+      "bold": false
+    },
+    "ytick": {
+      "fontsize": 10,
+      "bold": false
+    },
+    "legend": {
+      "fontsize": 12,
+      "bold": false
+    },
+    "text": {
+      "fontsize": 16,
+      "bold": true
+    }
+  }
+}
