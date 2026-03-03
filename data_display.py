@@ -65,13 +65,13 @@ def update_cycles_table(cycles_table, cycle_results, analyzer, electrode_area):
         use_specific=(electrode_area is not None and electrode_area > 0)
     )
     
-    # 更新表格列标题
+    # 更新表格列标题（现在有5列）
     if electrode_area and electrode_area > 0:
-        cycles_table.setColumnCount(4)
-        cycles_table.setHorizontalHeaderLabels(["循环", "面积 (C)", f"单位面积容 ({cap_display}/cm²)", "备注"])
+        cycles_table.setColumnCount(5)
+        cycles_table.setHorizontalHeaderLabels(["循环", "面积 (C)", f"单位面积容 ({cap_display}/cm²)", "备注", "绘图"])
     else:
-        cycles_table.setColumnCount(4)
-        cycles_table.setHorizontalHeaderLabels(["循环", "面积 (C)", f"电容 ({cap_display})", "备注"])
+        cycles_table.setColumnCount(5)
+        cycles_table.setHorizontalHeaderLabels(["循环", "面积 (C)", f"电容 ({cap_display})", "备注", "绘图"])
     
     for row, result in enumerate(cycle_results):
         cycle_num = result['cycle_num']

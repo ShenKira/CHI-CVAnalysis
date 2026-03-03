@@ -17,7 +17,7 @@
       "bold": false
     },
     "ytick": {
-      "fontsize": 10,
+      "fontsize": 7,
       "bold": false
     },
     "legend": {
@@ -25,8 +25,14 @@
       "bold": false
     },
     "text": {
-      "fontsize": 16,
+      "fontsize": 14,
       "bold": true
     }
+  },
+  "colors": {
+    "mode": "default",
+    "random_seed": 438521377,
+    "delta_e_min": 40.0,
+    "enable_random": true
   }
 }

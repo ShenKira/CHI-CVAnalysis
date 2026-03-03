@@ -41,6 +41,12 @@ DEFAULT_CONFIG = {
             "fontsize": 16,
             "bold": True
         }
+    },
+    "colors": {
+        "mode": "default",
+        "random_seed": 42,
+        "delta_e_min": 20.0,
+        "enable_random": False
     }
 }
 
@@ -108,6 +114,15 @@ class ConfigManager:
     def set_plot_config(self, plot_config):
         """设置绘图配置"""
         self.config['plot'] = plot_config
+        self.save_config(self.config)
+    
+    def get_color_config(self):
+        """获取颜色配置"""
+        return self.config.get('colors', {})
+    
+    def set_color_config(self, color_config):
+        """设置颜色配置"""
+        self.config['colors'] = color_config
         self.save_config(self.config)
     
     def save_config(self, config=None):

@@ -30,7 +30,7 @@ def _get_font_weight(bold):
     return 'bold' if bold else 'normal'
 
 
-def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_area, config=None):
+def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_area, config=None, selected_cycle_numbers=None, color_config=None):
     """绘制V-I曲线图"""
     # 默认配置
     if config is None:
@@ -44,6 +44,19 @@ def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_ar
             'text': {'fontsize': 9, 'bold': False}
         }
     
+    # 默认颜色配置
+    if color_config is None:
+        color_config = {
+            'mode': 'default',
+            'random_seed': 42,
+            'delta_e_min': 10.0,
+            'enable_random': False
+        }
+    
+    # 如果没有提供选中的循环编号，使用默认编号（从1开始）
+    if selected_cycle_numbers is None:
+        selected_cycle_numbers = list(range(1, len(cycles_data) + 1))
+    
     # 应用字体配置
     _apply_font_config(config)
     
@@ -54,13 +67,51 @@ def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_ar
     plt.rcParams['font.family'] = 'Times New Roman'
     plt.rcParams['font.size'] = 12
     
-    # 定义颜色列表（支持更多循环）
-    if len(cycles_data) <= 10:
-        colors = plt.cm.tab10(range(len(cycles_data)))
-    elif len(cycles_data) <= 20:
-        colors = plt.cm.tab20(range(len(cycles_data)))
+    # 生成颜色列表
+    from colours import generate_xkcd_color_sequence, get_default_colors
+    import matplotlib.colors as mcolors
+    
+    color_mode = color_config.get('mode', 'default')
+    num_colors_needed = len(cycles_data)
+    
+    if color_mode == 'xkcd' and color_config.get('enable_random', False):
+        # 使用xkcd随机颜色序列
+        try:
+            random_seed = color_config.get('random_seed', 42)
+            delta_e_min = color_config.get('delta_e_min', 10.0)
+            hex_colors = generate_xkcd_color_sequence(random_seed, delta_e_min, num_colors_needed)
+            colors = [mcolors.hex2color(c) for c in hex_colors]
+        except Exception as e:
+            # 如果生成失败，使用默认颜色
+            print(f"警告: xkcd颜色生成失败 ({e})，使用默认颜色")
+            try:
+                if num_colors_needed <= 10:
+                    colors = plt.cm.get_cmap('tab10')(range(num_colors_needed))
+                elif num_colors_needed <= 20:
+                    colors = plt.cm.get_cmap('tab20')(range(num_colors_needed))
+                else:
+                    colors = plt.cm.get_cmap('hsv')([(i / num_colors_needed) for i in range(num_colors_needed)])
+            except:
+                colors = list(mcolors.TABLEAU_COLORS.values())[:num_colors_needed]
+                if len(colors) < num_colors_needed:
+                    colors = colors * (num_colors_needed // len(colors) + 1)
+                    colors = colors[:num_colors_needed]
     else:
-        colors = plt.cm.hsv([(i / len(cycles_data)) for i in range(len(cycles_data))])
+        # 使用默认颜色
+        try:
+            if num_colors_needed <= 10:
+                colors = plt.cm.get_cmap('tab10')(range(num_colors_needed))
+            elif num_colors_needed <= 20:
+                colors = plt.cm.get_cmap('tab20')(range(num_colors_needed))
+            else:
+                colors = plt.cm.get_cmap('hsv')([(i / num_colors_needed) for i in range(num_colors_needed)])
+        except:
+            # 如果颜色映射失败，使用默认颜色
+            colors = list(mcolors.TABLEAU_COLORS.values())[:num_colors_needed]
+            if len(colors) < num_colors_needed:
+                # 如果颜色不够，循环使用
+                colors = colors * (num_colors_needed // len(colors) + 1)
+                colors = colors[:num_colors_needed]
     
     # 计算所有数据的最大电流值（单位：A）
     max_current_A = 0
@@ -83,12 +134,14 @@ def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_ar
         unit_str = 'nA'
     
     # 绘制每个循环的数据
-    for cycle_num, cycle_data in enumerate(cycles_data):
+    for idx, cycle_data in enumerate(cycles_data):
         voltages = [v for v, _ in cycle_data]
         currents = [i * scale_factor for _, i in cycle_data]
         
-        ax.plot(voltages, currents, color=colors[cycle_num], 
-               label=f'Cycle {cycle_num+1}', linewidth=2.0, alpha=0.85, marker=None)
+        # 使用原始循环编号作为标签
+        cycle_number = selected_cycle_numbers[idx] if idx < len(selected_cycle_numbers) else idx + 1
+        ax.plot(voltages, currents, color=colors[idx], 
+               label=f'Cycle {cycle_number}', linewidth=2.0, alpha=0.85, marker=None)
     
     # 获取配置（如果config不存在就用默认值）
     title_cfg = config.get('title', {'fontsize': 14, 'bold': True})

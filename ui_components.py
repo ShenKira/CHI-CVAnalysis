@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt import NavigationToolbar2QT
 
 
 class NavigationToolbar(NavigationToolbar2QT):
@@ -90,10 +90,10 @@ def create_file_selection_layout():
 def create_cycles_table():
     """创建循环结果表格"""
     cycles_table = QTableWidget()
-    cycles_table.setColumnCount(4)
-    cycles_table.setHorizontalHeaderLabels(["循环", "面积 (C)", "电容 (mF)", "备注"])
+    cycles_table.setColumnCount(5)
+    cycles_table.setHorizontalHeaderLabels(["循环", "面积 (C)", "电容 (mF)", "备注", "绘图"])
     cycles_table.setFont(QFont("Arial", 12))
-    cycles_table.horizontalHeader().setFont(QFont("Arial", 12, QFont.Bold))
+    cycles_table.horizontalHeader().setFont(QFont("Arial", 12, QFont.Weight.Bold))
     cycles_table.setMaximumWidth(500)
     cycles_table.verticalHeader().setDefaultSectionSize(32)
     
@@ -137,7 +137,7 @@ def create_left_panel_layout(cycles_table, result_text):
     left_layout = QVBoxLayout()
     
     title1 = QLabel("各循环电容值结果:")
-    title1.setFont(QFont("Arial", 13, QFont.Bold))
+    title1.setFont(QFont("Arial", 13, QFont.Weight.Bold))
     left_layout.addWidget(title1)
     
     subtitle1 = QLabel("(每行代表一轮循环，2 Segments)")
@@ -147,7 +147,7 @@ def create_left_panel_layout(cycles_table, result_text):
     left_layout.addWidget(cycles_table)
     
     title2 = QLabel("\n最终结果:")
-    title2.setFont(QFont("Arial", 13, QFont.Bold))
+    title2.setFont(QFont("Arial", 13, QFont.Weight.Bold))
     left_layout.addWidget(title2)
     
     left_layout.addWidget(result_text)
@@ -159,13 +159,28 @@ def create_right_panel_layout(canvas_widget):
     """创建右侧面板布局（图表）"""
     right_layout = QVBoxLayout()
     
+    # 创建V-I曲线图标签和配置按钮的水平布局
+    graph_header_layout = QHBoxLayout()
+    
     graph_label = QLabel("V-I曲线图:")
-    graph_label.setFont(QFont("Arial", 13, QFont.Bold))
-    right_layout.addWidget(graph_label)
+    graph_label.setFont(QFont("Arial", 13, QFont.Weight.Bold))
+    graph_header_layout.addWidget(graph_label)
+    
+    # 添加伸缩空间使标签在左侧，按钮在右侧
+    graph_header_layout.addStretch()
+    
+    # 创建配置按钮（稍后在cv_gui.py中连接信号）
+    config_btn = QPushButton("绘图配置")
+    config_btn.setFont(QFont("Arial", 9))
+    config_btn.setFixedWidth(90)  # 缩小按钮宽度
+    #config_btn.setEnabled(False)  # 初始禁用，等数据加载后启用
+    graph_header_layout.addWidget(config_btn)
+    
+    right_layout.addLayout(graph_header_layout)
     
     right_layout.addWidget(canvas_widget)
     
-    return right_layout
+    return right_layout, config_btn
 
 
 def create_save_buttons_layout():

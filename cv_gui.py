@@ -16,7 +16,7 @@ import matplotlib
 matplotlib.use('Qt5Agg')
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QFileDialog
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QFileDialog, QCheckBox
 )
 from PySide6.QtCore import Qt
 from pathlib import Path
@@ -50,6 +50,7 @@ class CVAnalysisGUI(QMainWindow):
         self.file_path = None
         self.electrode_area = None
         self.temp_dir = tempfile.mkdtemp(prefix="cv_analysis_")
+        self.plot_selections = []  # 存储每个循环的绘图选择状态
         
         # 初始化配置管理器
         self.config_manager = ConfigManager()
@@ -85,7 +86,7 @@ class CVAnalysisGUI(QMainWindow):
         left_layout = create_left_panel_layout(self.cycles_table, self.result_text)
         
         # 右侧面板
-        right_layout = create_right_panel_layout(canvas_widget)
+        right_layout, self.config_btn = create_right_panel_layout(canvas_widget)
         
         # 保存按钮
         save_layout, self.save_png_btn, self.save_svg_btn, self.copy_clipboard_btn = create_save_buttons_layout()
@@ -95,11 +96,8 @@ class CVAnalysisGUI(QMainWindow):
         
         right_layout.addLayout(save_layout)
         
-        # 配置按钮
-        from PySide6.QtWidgets import QPushButton
-        config_btn = QPushButton("绘图配置")
-        config_btn.clicked.connect(self.open_plot_config)
-        right_layout.addWidget(config_btn)
+        # 连接配置按钮信号
+        self.config_btn.clicked.connect(self.open_plot_config)
         
         # 添加左右面板到内容布局
         content_layout.addLayout(left_layout, stretch=1)
@@ -144,6 +142,60 @@ class CVAnalysisGUI(QMainWindow):
             pass
         super().closeEvent(event)
     
+    def _add_plot_checkboxes(self):
+        """在表格中添加绘图复选框"""
+        from PySide6.QtCore import Qt
+        
+        # 清除现有的复选框（如果有）
+        for row in range(self.cycles_table.rowCount()):
+            self.cycles_table.removeCellWidget(row, 4)
+        
+        # 为每个循环添加复选框
+        for row in range(len(self.plot_selections)):
+            checkbox = QCheckBox()
+            checkbox.setChecked(self.plot_selections[row])
+            checkbox.stateChanged.connect(lambda state, r=row: self._on_plot_selection_changed(r, state))
+            
+            # 创建一个容器来居中显示复选框
+            container = QWidget()
+            layout = QVBoxLayout()
+            layout.addWidget(checkbox)
+            layout.setAlignment(Qt.AlignCenter)
+            layout.setContentsMargins(0, 0, 0, 0)
+            container.setLayout(layout)
+            
+            self.cycles_table.setCellWidget(row, 4, container)
+    
+    def _on_plot_selection_changed(self, row, state):
+        """处理绘图选择状态变化"""
+        if row < len(self.plot_selections):
+            # state是整数，Qt.CheckState.Checked的值是2
+            self.plot_selections[row] = (state == 2)  # Qt.CheckState.Checked = 2
+            
+            # 如果有数据，重新绘制图表
+            if self.cycles_data and self.cycle_results:
+                self._update_plot_with_selection()
+    
+    def _update_plot_with_selection(self):
+        """根据选择状态更新图表"""
+        # 获取选择的循环数据
+        selected_cycles_data = []
+        selected_cycle_results = []
+        selected_cycle_numbers = []  # 存储原始循环编号
+        
+        for i, selected in enumerate(self.plot_selections):
+            if selected and i < len(self.cycles_data) and i < len(self.cycle_results):
+                selected_cycles_data.append(self.cycles_data[i])
+                selected_cycle_results.append(self.cycle_results[i])
+                selected_cycle_numbers.append(i + 1)  # 原始循环编号从1开始
+        
+        # 绘制图表（传入配置）
+        plot_config = self.config_manager.get_plot_config()
+        color_config = self.config_manager.get_color_config()
+        plot_data(self.figure, self.canvas, selected_cycles_data, selected_cycle_results, 
+                 self.analyzer, self.electrode_area, config=plot_config, 
+                 selected_cycle_numbers=selected_cycle_numbers, color_config=color_config)
+    
     def on_area_changed(self, value):
         """电极面积改变时的处理"""
         if value > 0:
@@ -154,12 +206,12 @@ class CVAnalysisGUI(QMainWindow):
         # 如果已经有数据，重新更新结果显示
         if self.capacitances:
             update_cycles_table(self.cycles_table, self.cycle_results, self.analyzer, self.electrode_area)
+            # 重新添加复选框
+            self._add_plot_checkboxes()
             update_result_text(self.result_text, self.cycle_results, self.analyzer, 
                              self.analyzer.metadata, self.electrode_area)
-            # 绘制图表时传入配置
-            plot_config = self.config_manager.get_plot_config()
-            plot_data(self.figure, self.canvas, self.cycles_data, self.cycle_results, 
-                     self.analyzer, self.electrode_area, config=plot_config)
+            # 重新绘制图表（根据选择状态）
+            self._update_plot_with_selection()
     
     def load_file(self):
         """打开文件对话框选择CV数据文件"""
@@ -210,6 +262,7 @@ class CVAnalysisGUI(QMainWindow):
             # 计算每个循环的电容
             self.capacitances = []
             self.cycle_results = []
+            self.plot_selections = []  # 重置绘图选择状态
             
             for cycle_num, cycle_data in enumerate(self.cycles_data, 1):
                 result = self.analyzer._calculate_cycle_capacitance(cycle_num, cycle_data)
@@ -217,6 +270,8 @@ class CVAnalysisGUI(QMainWindow):
                     self.cycle_results.append(result)
                     if not result.get('is_outlier', False) and result['capacitance'] > 0:
                         self.capacitances.append(result['capacitance'])
+                    # 默认选择所有循环进行绘图
+                    self.plot_selections.append(True)
             
             if not self.cycle_results:
                 QMessageBox.critical(self, "错误", "无法处理任何循环")
@@ -228,19 +283,21 @@ class CVAnalysisGUI(QMainWindow):
             # 更新表格
             update_cycles_table(self.cycles_table, self.cycle_results, self.analyzer, self.electrode_area)
             
+            # 添加绘图复选框
+            self._add_plot_checkboxes()
+            
             # 更新结果文本
             update_result_text(self.result_text, self.cycle_results, self.analyzer, 
                              self.analyzer.metadata, self.electrode_area)
             
-            # 绘制图表（传入配置）
-            plot_config = self.config_manager.get_plot_config()
-            plot_data(self.figure, self.canvas, self.cycles_data, self.cycle_results, 
-                     self.analyzer, self.electrode_area, config=plot_config)
+            # 绘制图表（根据选择状态）
+            self._update_plot_with_selection()
             
-            # 启用保存按钮
+            # 启用保存按钮和配置按钮
             self.save_png_btn.setEnabled(True)
             self.save_svg_btn.setEnabled(True)
             self.copy_clipboard_btn.setEnabled(True)
+            self.config_btn.setEnabled(True)
             
             self.statusBar().showMessage(f"分析完成！共识别 {len(self.cycles_data)} 轮循环，{len(self.capacitances)} 轮有效")
             
@@ -263,18 +320,21 @@ class CVAnalysisGUI(QMainWindow):
     def open_plot_config(self):
         """打开绘图配置对话框"""
         plot_config = self.config_manager.get_plot_config()
-        dialog = PlotConfigDialog(plot_config, self)
+        color_config = self.config_manager.get_color_config()
+        dialog = PlotConfigDialog(plot_config, self, color_config)
         
         if dialog.exec():
             # 用户点击确定，保存配置
             new_config = dialog.get_config()
+            new_color_config = dialog.get_color_config()
             self.config_manager.set_plot_config(new_config)
+            self.config_manager.set_color_config(new_color_config)
             
             # 如果有已加载的数据，重新绘制
             if self.cycles_data and self.cycle_results:
                 self.statusBar().showMessage("应用新的绘图配置...")
-                plot_data(self.figure, self.canvas, self.cycles_data, self.cycle_results,
-                         self.analyzer, self.electrode_area, config=new_config)
+                # 重新绘制图表（根据选择状态）
+                self._update_plot_with_selection()
                 self.statusBar().showMessage("绘图配置已更新")
     
     def import_config(self):
@@ -294,9 +354,8 @@ class CVAnalysisGUI(QMainWindow):
                 
                 # 重新绘制图表
                 if self.cycles_data and self.cycle_results:
-                    plot_config = self.config_manager.get_plot_config()
-                    plot_data(self.figure, self.canvas, self.cycles_data, self.cycle_results,
-                             self.analyzer, self.electrode_area, config=plot_config)
+                    # 重新绘制图表（根据选择状态）
+                    self._update_plot_with_selection()
             else:
                 QMessageBox.critical(self, "错误", "导入配置失败，请检查文件格式")
                 self.statusBar().showMessage("配置导入失败")
@@ -335,9 +394,8 @@ class CVAnalysisGUI(QMainWindow):
             
             # 重新绘制图表
             if self.cycles_data and self.cycle_results:
-                plot_config = self.config_manager.get_plot_config()
-                plot_data(self.figure, self.canvas, self.cycles_data, self.cycle_results,
-                         self.analyzer, self.electrode_area, config=plot_config)
+                # 重新绘制图表（根据选择状态）
+                self._update_plot_with_selection()
 
 
 def main():
