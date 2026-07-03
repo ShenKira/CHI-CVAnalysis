@@ -1,0 +1,92 @@
+{
+  "plot": {
+    "title": {
+      "fontsize": 20,
+      "bold": true
+    },
+    "xlabel": {
+      "fontsize": 20,
+      "bold": true
+    },
+    "ylabel": {
+      "fontsize": 20,
+      "bold": true
+    },
+    "xtick": {
+      "fontsize": 14,
+      "bold": false
+    },
+    "ytick": {
+      "fontsize": 14,
+      "bold": false
+    },
+    "legend": {
+      "fontsize": 12,
+      "bold": false
+    },
+    "text": {
+      "fontsize": 14,
+      "bold": true
+    },
+    "line_width": 2.0
+  },
+  "colors": {
+    "mode": "default",
+    "random_seed": 42,
+    "delta_e_min": 40.0,
+    "enable_random": false,
+    "custom_colors": [
+      "#1f77b4",
+      "#ff7f0e",
+      "#2ca02c",
+      "#d62728",
+      "#9467bd",
+      "#8c564b",
+      "#e377c2",
+      "#7f7f7f",
+      "#bcbd22",
+      "#17becf",
+      "#aec7e8",
+      "#ffbb78",
+      "#98df8a",
+      "#ff9896",
+      "#c5b0d5",
+      "#c49c94",
+      "#f7b6d2",
+      "#c7c7c7",
+      "#dbdb8d",
+      "#9edae5"
+    ]
+  },
+  "eis_plot": {
+    "nyquist": {
+      "color": "#1f77b4",
+      "marker": "o",
+      "marker_size": 5,
+      "line_style": "-",
+      "line_width": 1.5
+    },
+    "bode": {
+      "color": "#ff7f0e",
+      "marker": "s",
+      "marker_size": 4,
+      "line_style": "-",
+      "line_width": 1.5,
+      "z_color": "#2ca02c",
+      "char_freq_line_color": "#d62728",
+      "char_freq_line_width": 1.5
+    }
+  },
+  "axis": {
+    "linewidth": 1.0
+  },
+  "grid": {
+    "color": "#cccccc",
+    "linewidth": 0.8
+  },
+  "tick": {
+    "direction": "in",
+    "width": 1.5,
+    "length": 6.0
+  }
+}

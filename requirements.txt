@@ -1,0 +1,21 @@
+# CV Analysis Tool - 循环伏安分析工具
+# 项目依赖清单
+
+# GUI Framework
+PySide6>=6.4.0
+
+# Data Visualization
+matplotlib>=3.5.0
+
+# Image Processing
+Pillow>=9.0.0
+
+# Numerical Computing (matplotlib依赖)
+numpy>=1.21.0
+
+# Optional: for enhanced functionality
+# contourpy>=1.0.0  # 用于等高线绘制（matplotlib的依赖）
+# cycler>=0.11.0    # 用于颜色循环（matplotlib的依赖）
+# kiwisolver>=1.3.0 # 用于约束求解（matplotlib的依赖）
+# packaging>=21.0   # 用于版本管理（matplotlib的依赖）
+# fonttools>=4.22.0 # 用于字体处理（matplotlib的依赖）

@@ -1,0 +1,277 @@
+# -*- coding: utf-8 -*-
+"""
+配置管理器
+负责读取、保存、导入、导出config.json配置文件
+"""
+
+import json
+import os
+import copy
+from pathlib import Path
+
+
+# 默认配置
+DEFAULT_CONFIG = {
+    "plot": {
+        "title": {
+            "fontsize": 20,
+            "bold": True
+        },
+        "xlabel": {
+            "fontsize": 20,
+            "bold": True
+        },
+        "ylabel": {
+            "fontsize": 20,
+            "bold": True
+        },
+        "xtick": {
+            "fontsize": 14,
+            "bold": False
+        },
+        "ytick": {
+            "fontsize": 14,
+            "bold": False
+        },
+        "legend": {
+            "fontsize": 12,
+            "bold": False
+        },
+        "text": {
+            "fontsize": 14,
+            "bold": True
+        },
+        "line_width": 2.0
+    },
+    "colors": {
+        "mode": "default",
+        "random_seed": 42,
+        "delta_e_min": 40.0,
+        "enable_random": False,
+        "custom_colors": [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+            "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
+            "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5"
+        ]
+    },
+    "eis_plot": {
+        "nyquist": {
+            "color": "#1f77b4",
+            "marker": "o",
+            "marker_size": 5,
+            "line_style": "-",
+            "line_width": 1.5
+        },
+        "bode": {
+            "color": "#ff7f0e",
+            "marker": "s",
+            "marker_size": 4,
+            "line_style": "-",
+            "line_width": 1.5,
+            "z_color": "#2ca02c",
+            "char_freq_line_color": "#d62728",
+            "char_freq_line_width": 1.5
+        }
+    },
+    "axis": {
+        "linewidth": 1.5
+    },
+    "grid": {
+        "color": "#cccccc",
+        "linewidth": 0.8
+    },
+    "tick": {
+        "direction": "in",
+        "width": 1.5,
+        "length": 6
+    }
+}
+
+
+class ConfigManager:
+    """配置管理器类"""
+    
+    def __init__(self, config_path=None):
+        """
+        初始化配置管理器
+        
+        Args:
+            config_path: config.json文件路径，默认为脚本同目录
+        """
+        if config_path is None:
+            self.config_path = Path(__file__).parent / "config.json"
+        else:
+            self.config_path = Path(config_path)
+        
+        self.config = self._load_config()
+    
+    def _load_config(self):
+        """从config.json加载配置，不存在则创建默认配置"""
+        if self.config_path.exists():
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                # 合并默认配置和加载的配置（以加载的为准）
+                return self._merge_config(DEFAULT_CONFIG, config)
+            except Exception as e:
+                print(f"加载配置文件失败: {e}，使用默认配置")
+                return DEFAULT_CONFIG.copy()
+        else:
+            # 创建默认配置文件
+            self.save_config(DEFAULT_CONFIG)
+            return DEFAULT_CONFIG.copy()
+    
+    def _merge_config(self, default, loaded):
+        """
+        合并默认配置和加载的配置
+        
+        Args:
+            default: 默认配置
+            loaded: 加载的配置
+            
+        Returns:
+            合并后的配置
+        """
+        result = copy.deepcopy(default)
+        for key, value in loaded.items():
+            if isinstance(value, dict) and key in result and isinstance(result[key], dict):
+                result[key] = self._merge_config(result[key], value)
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
+    
+    def get_config(self):
+        """获取完整配置"""
+        return self.config
+    
+    def get_plot_config(self):
+        """获取绘图配置"""
+        return self.config.get('plot', {})
+    
+    def set_plot_config(self, plot_config):
+        """设置绘图配置"""
+        self.config['plot'] = plot_config
+        self.save_config(self.config)
+    
+    def get_color_config(self):
+        """获取颜色配置"""
+        return self.config.get('colors', {})
+    
+    def set_color_config(self, color_config):
+        """设置颜色配置"""
+        self.config['colors'] = color_config
+        self.save_config(self.config)
+
+    def get_eis_plot_config(self):
+        """获取EIS绘图配置"""
+        return self.config.get('eis_plot', {})
+
+    def set_eis_plot_config(self, eis_plot_config):
+        """设置EIS绘图配置"""
+        self.config['eis_plot'] = eis_plot_config
+        self.save_config(self.config)
+
+    def get_axis_config(self):
+        """获取坐标轴配置"""
+        return self.config.get('axis', {"linewidth": 1.5})
+
+    def set_axis_config(self, axis_config):
+        """设置坐标轴配置"""
+        self.config['axis'] = axis_config
+        self.save_config(self.config)
+
+    def get_grid_config(self):
+        """获取网格线配置"""
+        return self.config.get('grid', {"color": "#cccccc", "linewidth": 0.8})
+
+    def set_grid_config(self, grid_config):
+        """设置网格线配置"""
+        self.config['grid'] = grid_config
+        self.save_config(self.config)
+
+    def get_tick_config(self):
+        """获取刻度线配置"""
+        return self.config.get('tick', {"direction": "in", "width": 1.5, "length": 6})
+
+    def set_tick_config(self, tick_config):
+        """设置刻度线配置"""
+        self.config['tick'] = tick_config
+        self.save_config(self.config)
+    
+    def save_config(self, config=None):
+        """
+        保存配置到文件
+        
+        Args:
+            config: 要保存的配置，如果为None则保存当前配置
+        """
+        if config is None:
+            config = self.config
+        
+        try:
+            # 确保目录存在
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"保存配置文件失败: {e}")
+            return False
+    
+    def export_config(self, export_path):
+        """
+        导出配置到指定路径
+        
+        Args:
+            export_path: 导出目标路径
+            
+        Returns:
+            成功返回True，失败返回False
+        """
+        try:
+            export_path = Path(export_path)
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(export_path, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"导出配置失败: {e}")
+            return False
+    
+    def import_config(self, import_path):
+        """
+        从指定路径导入配置，并保存到默认位置
+        
+        Args:
+            import_path: 导入源路径
+            
+        Returns:
+            成功返回True，失败返回False
+        """
+        try:
+            import_path = Path(import_path)
+            if not import_path.exists():
+                print(f"配置文件不存在: {import_path}")
+                return False
+            
+            with open(import_path, 'r', encoding='utf-8') as f:
+                imported_config = json.load(f)
+            
+            # 合并导入的配置和默认配置
+            self.config = self._merge_config(DEFAULT_CONFIG, imported_config)
+            
+            # 保存到默认位置
+            self.save_config(self.config)
+            return True
+        except Exception as e:
+            print(f"导入配置失败: {e}")
+            return False
+    
+    def reset_config(self):
+        """重置为默认配置"""
+        self.config = DEFAULT_CONFIG.copy()
+        self.save_config(self.config)
+        return True
