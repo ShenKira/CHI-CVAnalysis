@@ -529,7 +529,7 @@ class CVAnalysisGUI(QMainWindow):
         self._apply_aspect_ratio()
 
     def _apply_aspect_ratio(self):
-        """将当前比例应用到绘图 — 通过 ax.set_box_aspect 控制坐标轴视觉比例"""
+        """将当前比例应用到绘图 — 通过 set_box_aspect 或手动定位控制坐标轴视觉比例"""
         if not self.figure.axes:
             return
 
@@ -549,11 +549,43 @@ class CVAnalysisGUI(QMainWindow):
         for ax in self.figure.axes:
             try:
                 ax.set_box_aspect(box_ratio)  # None = auto
-            except Exception as e:
-                sys.stderr.write(f"[WARN] set_box_aspect failed: {e}\n")
+            except Exception:
+                pass
+
+        # 备用方案：如果 set_box_aspect 未生效（Nuitka 环境），手动调整 axes 位置
+        if box_ratio is not None:
+            try:
+                sample_ax = self.figure.axes[0]
+                actual = sample_ax.get_box_aspect()
+                if actual is None or abs(actual - box_ratio) > 0.01:
+                    self._apply_aspect_ratio_by_position(box_ratio)
+            except Exception:
+                self._apply_aspect_ratio_by_position(box_ratio)
 
         self.canvas.draw()
         self.canvas.flush_events()
+
+    def _apply_aspect_ratio_by_position(self, box_ratio):
+        """备用方案：通过手动设置 axes 位置实现比例控制（Nuitka 兼容）"""
+        fig_w, fig_h = self.figure.get_size_inches()
+        fig_aspect = fig_w / fig_h
+        for ax in self.figure.axes:
+            pos = ax.get_position()
+            cur_w = pos.x1 - pos.x0
+            cur_h = pos.y1 - pos.y0
+            if cur_h <= 0:
+                continue
+            # 像素宽高比 = (归一化宽/归一化高) * (图宽/图高)
+            cur_pixel_aspect = (cur_w / cur_h) * fig_aspect
+            if cur_pixel_aspect > box_ratio:
+                new_w = cur_h * (box_ratio / fig_aspect)
+                new_h = cur_h
+            else:
+                new_w = cur_w
+                new_h = cur_w * (fig_aspect / box_ratio)
+            cx = pos.x0 + cur_w / 2
+            cy = pos.y0 + cur_h / 2
+            ax.set_position([cx - new_w / 2, cy - new_h / 2, new_w, new_h])
 
     # ═══════════════════════════════════════════════════════════════════
     #  Display toggles
