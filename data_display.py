@@ -148,24 +148,25 @@ def update_cycles_table(cycles_table, cycle_results, analyzer, electrode_area):
     cycles_table.resizeColumnsToContents()
 
 
-def update_result_text(results_table, cycle_results, analyzer, metadata, electrode_area):
+def update_result_text(results_table, cycle_results, analyzer, metadata, electrode_area, is_multi_file=False):
     """更新最终结果表格"""
     results_table.setRowCount(0)
 
-    # --- 实验参数 ---
-    _add_section_header(results_table, "实验参数")
-    if 'init_e' in metadata:
-        _add_row(results_table, "  初始电压", f"{metadata['init_e']} V")
-    if 'high_e' in metadata:
-        _add_row(results_table, "  最高电压", f"{metadata['high_e']} V")
-    if 'low_e' in metadata:
-        _add_row(results_table, "  最低电压", f"{metadata['low_e']} V")
-    if 'scan_rate' in metadata:
-        _add_row(results_table, "  扫描速率", f"{metadata['scan_rate']} V/s")
-    if 'sensitivity' in metadata:
-        _add_row(results_table, "  灵敏度", f"{metadata['sensitivity']:.0e} A/V")
-    if electrode_area and electrode_area > 0:
-        _add_row(results_table, "  电极面积", f"{electrode_area:.4f} cm²")
+    if not is_multi_file:
+        # --- 实验参数（多文件模式下不显示）---
+        _add_section_header(results_table, "实验参数")
+        if 'init_e' in metadata:
+            _add_row(results_table, "  初始电压", f"{metadata['init_e']} V")
+        if 'high_e' in metadata:
+            _add_row(results_table, "  最高电压", f"{metadata['high_e']} V")
+        if 'low_e' in metadata:
+            _add_row(results_table, "  最低电压", f"{metadata['low_e']} V")
+        if 'scan_rate' in metadata:
+            _add_row(results_table, "  扫描速率", f"{metadata['scan_rate']} V/s")
+        if 'sensitivity' in metadata:
+            _add_row(results_table, "  灵敏度", f"{metadata['sensitivity']:.0e} A/V")
+        if electrode_area and electrode_area > 0:
+            _add_row(results_table, "  电极面积", f"{electrode_area:.4f} cm²")
 
     # --- 循环统计 ---
     valid_capacitances = analyzer._get_valid_capacitances(cycle_results)
@@ -184,41 +185,42 @@ def update_result_text(results_table, cycle_results, analyzer, metadata, electro
     if outlier_cycles:
         _add_row(results_table, "  被排除轮次", ', '.join(str(c) for c in outlier_cycles))
 
-    # --- 电容结果 ---
-    _add_section_header(results_table, "电容结果")
+    if not is_multi_file:
+        # --- 电容结果（多文件模式下不显示）---
+        _add_section_header(results_table, "电容结果")
 
-    if len(valid_capacitances) > 1:
-        avg_capacitance = analyzer._calculate_robust_average(valid_capacitances)
-        std_dev = statistics.stdev(valid_capacitances)
-        cv_pct = (std_dev / avg_capacitance) * 100
+        if len(valid_capacitances) > 1:
+            avg_capacitance = analyzer._calculate_robust_average(valid_capacitances)
+            std_dev = statistics.stdev(valid_capacitances)
+            cv_pct = (std_dev / avg_capacitance) * 100
 
-        if electrode_area and electrode_area > 0:
-            specific_cap = avg_capacitance / electrode_area
-            min_specific = min(valid_capacitances) / electrode_area
-            max_specific = max(valid_capacitances) / electrode_area
-            std_specific = std_dev / electrode_area
+            if electrode_area and electrode_area > 0:
+                specific_cap = avg_capacitance / electrode_area
+                min_specific = min(valid_capacitances) / electrode_area
+                max_specific = max(valid_capacitances) / electrode_area
+                std_specific = std_dev / electrode_area
 
-            _add_row(results_table, "  平均电容", f"{avg_capacitance:.6e} F = {avg_capacitance*1000:.6f} mF")
-            _add_row(results_table, "  单位面积电容", f"{specific_cap*1000:.6f} mF/cm² = {specific_cap*1e6:.6f} µF/cm²")
-            _add_row(results_table, "  最小值", f"{min_specific*1000:.6f} mF/cm²")
-            _add_row(results_table, "  最大值", f"{max_specific*1000:.6f} mF/cm²")
-            _add_row(results_table, "  标准差", f"{std_specific*1000:.6f} mF/cm²")
-            _add_row(results_table, "  变异系数", f"{cv_pct:.2f}%")
+                _add_row(results_table, "  平均电容", f"{avg_capacitance:.6e} F = {avg_capacitance*1000:.6f} mF")
+                _add_row(results_table, "  单位面积电容", f"{specific_cap*1000:.6f} mF/cm² = {specific_cap*1e6:.6f} µF/cm²")
+                _add_row(results_table, "  最小值", f"{min_specific*1000:.6f} mF/cm²")
+                _add_row(results_table, "  最大值", f"{max_specific*1000:.6f} mF/cm²")
+                _add_row(results_table, "  标准差", f"{std_specific*1000:.6f} mF/cm²")
+                _add_row(results_table, "  变异系数", f"{cv_pct:.2f}%")
+            else:
+                _add_row(results_table, "  平均电容", f"{avg_capacitance:.6e} F = {avg_capacitance*1000:.6f} mF")
+                _add_row(results_table, "  最小值", f"{min(valid_capacitances)*1000:.6f} mF")
+                _add_row(results_table, "  最大值", f"{max(valid_capacitances)*1000:.6f} mF")
+                _add_row(results_table, "  标准差", f"{std_dev:.6e} F = {std_dev*1000:.6f} mF")
+                _add_row(results_table, "  变异系数", f"{cv_pct:.2f}%")
+        elif len(valid_capacitances) == 1:
+            if electrode_area and electrode_area > 0:
+                specific_cap = valid_capacitances[0] / electrode_area
+                _add_row(results_table, "  电容值", f"{valid_capacitances[0]:.6e} F = {valid_capacitances[0]*1000:.6f} mF")
+                _add_row(results_table, "  单位面积电容", f"{specific_cap*1000:.6f} mF/cm² = {specific_cap*1e6:.6f} µF/cm²")
+            else:
+                _add_row(results_table, "  电容值", f"{valid_capacitances[0]:.6e} F = {valid_capacitances[0]*1000:.6f} mF")
         else:
-            _add_row(results_table, "  平均电容", f"{avg_capacitance:.6e} F = {avg_capacitance*1000:.6f} mF")
-            _add_row(results_table, "  最小值", f"{min(valid_capacitances)*1000:.6f} mF")
-            _add_row(results_table, "  最大值", f"{max(valid_capacitances)*1000:.6f} mF")
-            _add_row(results_table, "  标准差", f"{std_dev:.6e} F = {std_dev*1000:.6f} mF")
-            _add_row(results_table, "  变异系数", f"{cv_pct:.2f}%")
-    elif len(valid_capacitances) == 1:
-        if electrode_area and electrode_area > 0:
-            specific_cap = valid_capacitances[0] / electrode_area
-            _add_row(results_table, "  电容值", f"{valid_capacitances[0]:.6e} F = {valid_capacitances[0]*1000:.6f} mF")
-            _add_row(results_table, "  单位面积电容", f"{specific_cap*1000:.6f} mF/cm² = {specific_cap*1e6:.6f} µF/cm²")
-        else:
-            _add_row(results_table, "  电容值", f"{valid_capacitances[0]:.6e} F = {valid_capacitances[0]*1000:.6f} mF")
-    else:
-        _add_row(results_table, "  警告", "没有有效的循环数据可用于统计")
+            _add_row(results_table, "  警告", "没有有效的循环数据可用于统计")
 
     results_table.resizeColumnsToContents()
 

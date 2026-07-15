@@ -6,6 +6,7 @@ UI组件和样式配置
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTableWidget, QDoubleSpinBox, QHeaderView, QAbstractItemView, QSizePolicy,
+    QCheckBox,
 )
 from PySide6.QtGui import QFont
 from matplotlib.figure import Figure
@@ -100,15 +101,20 @@ def create_file_selection_layout():
     area_input.setValue(0)
     area_input.setMaximumWidth(140)
     area_input.setToolTip("输入电极面积（可选），用于计算单位面积电容")
+
+    multi_file_cb = QCheckBox("多文件")
+    multi_file_cb.setFont(QFont("Arial", 12))
+    multi_file_cb.setToolTip("允许同时选择多个CV文件，合并绘图并连续编号")
     
     file_layout.addWidget(file_label)
     file_layout.addWidget(current_file_label)
     file_layout.addStretch()
     file_layout.addWidget(area_label)
     file_layout.addWidget(area_input)
+    file_layout.addWidget(multi_file_cb)
     file_layout.addWidget(load_btn)
     
-    return file_layout, current_file_label, load_btn, area_input, area_label
+    return file_layout, current_file_label, load_btn, area_input, area_label, multi_file_cb
 
 
 def create_cycles_table():
@@ -118,7 +124,6 @@ def create_cycles_table():
     cycles_table.setHorizontalHeaderLabels(["循环", "面积 (C)", "电容 (mF)", "备注", "绘图"])
     cycles_table.setFont(QFont("Arial", 12))
     cycles_table.horizontalHeader().setFont(QFont("Arial", 12, QFont.Weight.Bold))
-    cycles_table.setMaximumWidth(500)
     cycles_table.verticalHeader().setDefaultSectionSize(32)
     
     return cycles_table
@@ -131,7 +136,6 @@ def create_result_text_widget():
     results_table.setHorizontalHeaderLabels(["参数", "值"])
     results_table.setFont(QFont("Arial", 11))
     results_table.horizontalHeader().setFont(QFont("Arial", 11, QFont.Weight.Bold))
-    results_table.setMaximumWidth(500)
     results_table.setMaximumHeight(350)
     results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     results_table.setSelectionMode(QAbstractItemView.NoSelection)

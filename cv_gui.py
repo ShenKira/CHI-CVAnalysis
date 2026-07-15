@@ -20,7 +20,7 @@ matplotlib.use('Qt5Agg')
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QMessageBox, QFileDialog, QCheckBox, QLabel, QPushButton,
-    QButtonGroup,
+    QButtonGroup, QSplitter,
 )
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
@@ -56,6 +56,8 @@ class CVAnalysisGUI(QMainWindow):
         self.capacitances = []
         self.cycle_results = []
         self.file_path = None
+        self.file_paths = []
+        self.is_multi_file = False
         self.electrode_area = None
         self.temp_dir = tempfile.mkdtemp(prefix="cv_analysis_")
         self.plot_selections = []
@@ -87,7 +89,7 @@ class CVAnalysisGUI(QMainWindow):
         main_layout = QVBoxLayout()
 
         # ── 文件选择栏 ─────────────────────────────────────
-        file_layout, self.file_label, self.load_btn, self.area_input, self.area_label = create_file_selection_layout()
+        file_layout, self.file_label, self.load_btn, self.area_input, self.area_label, self.multi_file_cb = create_file_selection_layout()
         self.load_btn.setText("导入数据文件")
         self.load_btn.clicked.connect(self.load_file)
         self.area_input.valueChanged.connect(self.on_area_changed)
@@ -96,8 +98,9 @@ class CVAnalysisGUI(QMainWindow):
         self.area_input.setVisible(False)
         main_layout.addLayout(file_layout)
 
-        # ── 内容区域: 左面板 + 右面板 ──────────────────────
-        content_layout = QHBoxLayout()
+        # ── 内容区域: 左面板 + 右面板 (可拖动调节比例) ──────
+        content_splitter = QSplitter(Qt.Horizontal)
+        content_splitter.setChildrenCollapsible(False)
 
         # --- 左面板: CV 和 EIS 各自的面板 ---
         self.cycles_table = create_cycles_table()
@@ -115,15 +118,15 @@ class CVAnalysisGUI(QMainWindow):
         self.eis_left_widget.setLayout(create_eis_left_panel_layout(self.eis_results_table))
         self.eis_left_widget.setVisible(False)
 
-        # left container — fixed width so the plot can resize freely
+        # left container — holds CV/EIS panel widgets
         left_container = QVBoxLayout()
         left_container.setContentsMargins(0, 0, 0, 0)
         left_container.addWidget(self.cv_left_widget)
         left_container.addWidget(self.eis_left_widget)
         left_widget = QWidget()
         left_widget.setLayout(left_container)
-        left_widget.setMaximumWidth(640)
-        content_layout.addWidget(left_widget)
+        left_widget.setMinimumWidth(300)
+        content_splitter.addWidget(left_widget)
 
         # --- 右面板: 共享绘图区域 ---
         self.figure, self.canvas, canvas_widget = create_matplotlib_canvas()
@@ -185,8 +188,11 @@ class CVAnalysisGUI(QMainWindow):
         self.copy_clipboard_btn.clicked.connect(self.copy_plot_to_clipboard)
         right_layout.addLayout(save_layout)
 
-        content_layout.addLayout(right_layout, stretch=1)
-        main_layout.addLayout(content_layout, stretch=1)
+        right_widget = QWidget()
+        right_widget.setLayout(right_layout)
+        content_splitter.addWidget(right_widget)
+        content_splitter.setSizes([500, 1000])
+        main_layout.addWidget(content_splitter, stretch=1)
 
         main_widget.setLayout(main_layout)
 
@@ -229,25 +235,45 @@ class CVAnalysisGUI(QMainWindow):
     def load_file(self):
         """打开文件对话框，自动判断CV或EIS"""
         file_dialog = QFileDialog()
-        file_path, _ = file_dialog.getOpenFileName(
-            self,
-            "选择数据文件",
-            "",
-            "文本文件 (*.txt);;所有文件 (*.*)"
-        )
 
-        if not file_path:
-            return
+        if self.multi_file_cb.isChecked():
+            file_paths, _ = file_dialog.getOpenFileNames(
+                self,
+                "选择数据文件（可多选）",
+                "",
+                "文本文件 (*.txt);;所有文件 (*.*)"
+            )
+            if not file_paths:
+                return
 
-        # detect file type from content
-        file_type = self._detect_file_type(file_path)
-
-        if file_type == 'cv':
-            self._load_cv_file(file_path)
-        elif file_type == 'eis':
-            self._load_eis_file(file_path)
+            for fp in file_paths:
+                file_type = self._detect_file_type(fp)
+                if file_type != 'cv':
+                    QMessageBox.critical(
+                        self, "错误",
+                        f"多文件模式下仅支持CV文件。\n无效文件: {Path(fp).name}"
+                    )
+                    return
+            self._load_cv_files(file_paths)
         else:
-            QMessageBox.warning(self, "警告", "无法识别文件类型。\n文件需包含 'Cyclic Voltammetry' 或 'A.C. Impedance' 标记。")
+            file_path, _ = file_dialog.getOpenFileName(
+                self,
+                "选择数据文件",
+                "",
+                "文本文件 (*.txt);;所有文件 (*.*)"
+            )
+
+            if not file_path:
+                return
+
+            file_type = self._detect_file_type(file_path)
+
+            if file_type == 'cv':
+                self._load_cv_file(file_path)
+            elif file_type == 'eis':
+                self._load_eis_file(file_path)
+            else:
+                QMessageBox.warning(self, "警告", "无法识别文件类型。\n文件需包含 'Cyclic Voltammetry' 或 'A.C. Impedance' 标记。")
 
     @staticmethod
     def _detect_file_type(file_path):
@@ -291,9 +317,94 @@ class CVAnalysisGUI(QMainWindow):
     def _load_cv_file(self, file_path):
         """加载CV文件"""
         self._switch_to_mode('cv')
+        self.is_multi_file = False
+        self.file_paths = []
         self.file_path = file_path
         self.file_label.setText(Path(file_path).name)
         self._analyze_cv_file()
+
+    def _load_cv_files(self, file_paths):
+        """加载多个CV文件"""
+        self._switch_to_mode('cv')
+        self.is_multi_file = True
+        self.file_paths = file_paths
+        self.file_path = None
+        count = len(file_paths)
+        self.file_label.setText(f"已选择 {count} 个文件")
+        self.file_label.setToolTip('\n'.join(str(Path(p).name) for p in file_paths))
+        self._analyze_cv_files()
+
+    def _analyze_cv_files(self):
+        """分析多个CV文件，合并所有循环并连续编号"""
+        if not self.file_paths:
+            return
+
+        try:
+            self.statusBar().showMessage("正在分析多个CV文件...")
+
+            combined_cycles_data = []
+            combined_cycle_results = []
+            combined_capacitances = []
+            combined_plot_selections = []
+            global_cycle_num = 0
+            last_analyzer = None
+
+            for fp in self.file_paths:
+                analyzer = CVAnalyzer(sensitivity_threshold_factor=10, outlier_count=1)
+                if not analyzer.read_file(fp):
+                    QMessageBox.critical(self, "错误", f"无法读取文件: {Path(fp).name}")
+                    self.statusBar().showMessage("错误：无法读取文件")
+                    return
+
+                cycles_data = analyzer._split_into_cycles()
+                if not cycles_data:
+                    QMessageBox.critical(self, "错误", f"无法从文件分割循环数据: {Path(fp).name}")
+                    self.statusBar().showMessage("错误：无法分割循环数据")
+                    return
+
+                for cycle_data in cycles_data:
+                    global_cycle_num += 1
+                    result = analyzer._calculate_cycle_capacitance(global_cycle_num, cycle_data)
+                    if result is not None:
+                        combined_cycles_data.append(cycle_data)
+                        combined_cycle_results.append(result)
+                        if not result.get('is_outlier', False) and result['capacitance'] > 0:
+                            combined_capacitances.append(result['capacitance'])
+                        combined_plot_selections.append(True)
+
+                last_analyzer = analyzer
+
+            if not combined_cycle_results:
+                QMessageBox.critical(self, "错误", "无法处理任何循环")
+                self.statusBar().showMessage("错误：无法处理任何循环")
+                return
+
+            self.analyzer = last_analyzer
+            self.cycles_data = combined_cycles_data
+            self.cycle_results = combined_cycle_results
+            self.capacitances = combined_capacitances
+            self.plot_selections = combined_plot_selections
+
+            update_cycles_table(self.cycles_table, self.cycle_results, self.analyzer, self.electrode_area)
+            self._add_plot_checkboxes()
+            update_result_text(self.results_table, self.cycle_results, self.analyzer,
+                             self.analyzer.metadata, self.electrode_area,
+                             is_multi_file=self.is_multi_file)
+            self._update_plot_with_selection()
+
+            self.save_png_btn.setEnabled(True)
+            self.save_svg_btn.setEnabled(True)
+            self.copy_clipboard_btn.setEnabled(True)
+            self.config_btn.setEnabled(True)
+
+            total_cycles = len(self.cycles_data)
+            valid_count = len(self.capacitances)
+            file_count = len(self.file_paths)
+            self.statusBar().showMessage(f"分析完成！{file_count} 个文件，共识别 {total_cycles} 轮循环，{valid_count} 轮有效")
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"分析过程中出错: {str(e)}")
+            self.statusBar().showMessage("错误：分析过程出错")
 
     def _analyze_cv_file(self):
         """分析CV文件"""
@@ -335,7 +446,8 @@ class CVAnalysisGUI(QMainWindow):
             update_cycles_table(self.cycles_table, self.cycle_results, self.analyzer, self.electrode_area)
             self._add_plot_checkboxes()
             update_result_text(self.results_table, self.cycle_results, self.analyzer,
-                             self.analyzer.metadata, self.electrode_area)
+                             self.analyzer.metadata, self.electrode_area,
+                             is_multi_file=self.is_multi_file)
             self._update_plot_with_selection()
 
             self.save_png_btn.setEnabled(True)
@@ -404,7 +516,8 @@ class CVAnalysisGUI(QMainWindow):
         color_config = self.config_manager.get_color_config()
         plot_data(self.figure, self.canvas, selected_cycles_data, selected_cycle_results,
                  self.analyzer, self.electrode_area, config=plot_config,
-                 selected_cycle_numbers=selected_cycle_numbers, color_config=color_config)
+                 selected_cycle_numbers=selected_cycle_numbers, color_config=color_config,
+                 is_multi_file=self.is_multi_file)
         self._apply_aspect_ratio()
         self._apply_display_settings()
 
@@ -419,7 +532,8 @@ class CVAnalysisGUI(QMainWindow):
             update_cycles_table(self.cycles_table, self.cycle_results, self.analyzer, self.electrode_area)
             self._add_plot_checkboxes()
             update_result_text(self.results_table, self.cycle_results, self.analyzer,
-                             self.analyzer.metadata, self.electrode_area)
+                             self.analyzer.metadata, self.electrode_area,
+                             is_multi_file=self.is_multi_file)
             self._update_plot_with_selection()
 
     # ═══════════════════════════════════════════════════════════════════
@@ -632,11 +746,11 @@ class CVAnalysisGUI(QMainWindow):
 
     def save_plot_png(self):
         """保存图表为PNG格式"""
-        save_plot_png(self.figure, self.file_path, self, self.statusBar())
+        save_plot_png(self.figure, self.file_path, self, self.statusBar(), is_multi_file=self.is_multi_file, file_paths=self.file_paths)
 
     def save_plot_svg(self):
         """保存图表为SVG格式"""
-        save_plot_svg(self.figure, self.file_path, self, self.statusBar())
+        save_plot_svg(self.figure, self.file_path, self, self.statusBar(), is_multi_file=self.is_multi_file, file_paths=self.file_paths)
 
     def copy_plot_to_clipboard(self):
         """将图表复制到剪切板"""

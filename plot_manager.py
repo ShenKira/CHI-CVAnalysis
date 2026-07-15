@@ -96,7 +96,7 @@ def _apply_global_axis_style(ax, global_config):
     ax.tick_params(axis='both', direction=tick_dir, width=tick_width, length=tick_length)
 
 
-def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_area, config=None, selected_cycle_numbers=None, color_config=None):
+def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_area, config=None, selected_cycle_numbers=None, color_config=None, is_multi_file=False):
     """绘制V-I曲线图"""
     # 默认配置
     if config is None:
@@ -269,46 +269,47 @@ def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_ar
     valid_capacitances = analyzer._get_valid_capacitances(cycle_results)
     capacitances = [r['capacitance'] for r in cycle_results if r['capacitance'] > 0]
     
-    if len(valid_capacitances) > 1:
-        avg_cap = analyzer._calculate_robust_average(valid_capacitances)
-        std_dev = statistics.stdev(valid_capacitances)
-    elif len(valid_capacitances) == 1:
-        avg_cap = valid_capacitances[0]
-        std_dev = 0
-    else:
-        avg_cap = capacitances[0] if capacitances else 0
-        std_dev = 0
-    
-    # 获取电容单位
-    cap_unit, cap_factor, cap_display = get_capacitance_unit(
-        cycle_results,
-        capacitances,
-        analyzer,
-        electrode_area,
-        use_specific=(electrode_area is not None and electrode_area > 0)
-    )
-    
-    # 格式化电容值显示
-    if electrode_area and electrode_area > 0:
-        avg_cap_display = (avg_cap / electrode_area) * cap_factor
-        std_dev_display = (std_dev / electrode_area) * cap_factor
-    else:
-        avg_cap_display = avg_cap * cap_factor
-        std_dev_display = std_dev * cap_factor
-    
-    # 创建注释文本
-    if electrode_area and electrode_area > 0:
-        annotation_text = f'Areal Capacitance = {avg_cap_display:.6g} {cap_display}/cm²\nSD = {std_dev_display:.6g} {cap_display}/cm²'
-    else:
-        annotation_text = f'Capacitance = {avg_cap_display:.6g} {cap_display}\nSD = {std_dev_display:.6g} {cap_display}'
-    
-    # 在右下角添加文字注释
-    ax.text(0.98, 0.05, annotation_text, transform=ax.transAxes,
-            fontsize=text_cfg.get('fontsize', 9), 
-            verticalalignment='bottom', horizontalalignment='right',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
-            fontname='Times New Roman', 
-            fontweight=_get_font_weight(text_cfg.get('bold', False)))
+    if not is_multi_file:
+        if len(valid_capacitances) > 1:
+            avg_cap = analyzer._calculate_robust_average(valid_capacitances)
+            std_dev = statistics.stdev(valid_capacitances)
+        elif len(valid_capacitances) == 1:
+            avg_cap = valid_capacitances[0]
+            std_dev = 0
+        else:
+            avg_cap = capacitances[0] if capacitances else 0
+            std_dev = 0
+        
+        # 获取电容单位
+        cap_unit, cap_factor, cap_display = get_capacitance_unit(
+            cycle_results,
+            capacitances,
+            analyzer,
+            electrode_area,
+            use_specific=(electrode_area is not None and electrode_area > 0)
+        )
+        
+        # 格式化电容值显示
+        if electrode_area and electrode_area > 0:
+            avg_cap_display = (avg_cap / electrode_area) * cap_factor
+            std_dev_display = (std_dev / electrode_area) * cap_factor
+        else:
+            avg_cap_display = avg_cap * cap_factor
+            std_dev_display = std_dev * cap_factor
+        
+        # 创建注释文本
+        if electrode_area and electrode_area > 0:
+            annotation_text = f'Areal Capacitance = {avg_cap_display:.6g} {cap_display}/cm²\nSD = {std_dev_display:.6g} {cap_display}/cm²'
+        else:
+            annotation_text = f'Capacitance = {avg_cap_display:.6g} {cap_display}\nSD = {std_dev_display:.6g} {cap_display}'
+        
+        # 在右下角添加文字注释
+        ax.text(0.98, 0.05, annotation_text, transform=ax.transAxes,
+                fontsize=text_cfg.get('fontsize', 9), 
+                verticalalignment='bottom', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                fontname='Times New Roman', 
+                fontweight=_get_font_weight(text_cfg.get('bold', False)))
     
     # 添加网格与全局坐标轴样式
     _apply_global_axis_style(ax, config)
@@ -318,16 +319,22 @@ def plot_data(figure, canvas, cycles_data, cycle_results, analyzer, electrode_ar
     canvas.draw()
 
 
-def save_plot_png(figure, file_path, parent_widget, status_bar):
+def save_plot_png(figure, file_path, parent_widget, status_bar, is_multi_file=False, file_paths=None):
     """保存图表为PNG格式"""
-    if not file_path:
+    if not is_multi_file and not file_path:
+        return
+    if is_multi_file and not file_paths:
         return
     
     file_dialog = QFileDialog()
+    if is_multi_file:
+        default_name = "multi_cv_curve.png"
+    else:
+        default_name = Path(file_path).stem + "_cv_curve.png"
     output_path, _ = file_dialog.getSaveFileName(
         parent_widget,
         "保存PNG文件",
-        Path(file_path).stem + "_cv_curve.png",
+        default_name,
         "PNG文件 (*.png)"
     )
     
@@ -342,16 +349,22 @@ def save_plot_png(figure, file_path, parent_widget, status_bar):
             status_bar.showMessage("错误：保存PNG失败")
 
 
-def save_plot_svg(figure, file_path, parent_widget, status_bar):
+def save_plot_svg(figure, file_path, parent_widget, status_bar, is_multi_file=False, file_paths=None):
     """保存图表为SVG格式"""
-    if not file_path:
+    if not is_multi_file and not file_path:
+        return
+    if is_multi_file and not file_paths:
         return
     
     file_dialog = QFileDialog()
+    if is_multi_file:
+        default_name = "multi_cv_curve.svg"
+    else:
+        default_name = Path(file_path).stem + "_cv_curve.svg"
     output_path, _ = file_dialog.getSaveFileName(
         parent_widget,
         "保存SVG文件",
-        Path(file_path).stem + "_cv_curve.svg",
+        default_name,
         "SVG文件 (*.svg)"
     )
     
