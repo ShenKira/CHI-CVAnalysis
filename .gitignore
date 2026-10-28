@@ -1,21 +1,95 @@
-# --- Build / Dist 目录 ---
+# Build outputs
 *.build/
 *.dist/
 *.onefile-build/
-# --- Python ---
+CV-ANALYSIS-v*/
+CVAnalysis_StandAlone_v*/
+*.exe
+*.rar
+
+# Python
 __pycache__/
 *.py[cod]
-# --- VsCode ---
-.vscode/
-# --- Versioned output directories ---
-*v*.*.*/
+.pytest_cache/
+.test_tmp/
 
-# --- Temp Files ---
-*.xml
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local temp files (never commit secrets or backups)
 *.log
 *.tmp
 *.bak
-*.exe
-*.bat
-# --- Tests ---
-tests/
+*.cvproj
+
+# Temporary task workspaces
+/temp/
+
+# Nuitka build cache / versioned outputs
+/build_cache/
+/build_cache*/
+/CVAnalysis_OneFile_v*/
+
+# Private measurement data and generated analysis artifacts
+# Keep real instrument exports, project files and user results out of Git.
+/testdata/
+/CP-Test.txt
+*.bin
+*.chi
+*.mpr
+/*.csv
+/*.tsv
+/*.xlsx
+/*.xls
+/*.png
+/*.jpg
+/*.jpeg
+/*.pdf
+/*.svg
+/*.tif
+/*.tiff
+/*.npy
+/*.npz
+/*.mat
+/*.pkl
+/*.pickle
+
+# Local runtime configuration may contain machine paths or user settings.
+/config.json
+
+# Local environment / secret files
+.env
+.env.*
+*.key
+*.pem
+
+# Additional local build/test artifacts (GitHub sync hygiene)
+/build/
+/dist/
+*.egg-info/
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.pdb
+*.dmp
+nuitka-crash-report.xml
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.venv/
+venv/
+env/
+
+# Local handoff notes (may contain workspace state or local data names)
+/Vibe_Coding_Outline.md
+/docs/IMPLEMENTATION_LOG.md
+/README_LOCAL.md
+
+# Local release notes draft (copy into GitHub Release)
+/update_detailed.md

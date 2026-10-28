@@ -1,37 +1,105 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-CV分析工具 - 简化版启动脚本
-用于快速测试和启动GUI
-"""
+"""CVAnalysis v2 entry point."""
 
-import sys
+from __future__ import annotations
+
+import faulthandler
 import os
+import sys
+import tempfile
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-# 确保当前目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-def run_gui():
-    """启动GUI应用"""
+
+def _startup_log_path() -> Path:
+    """Return a writable diagnostic log path, even in windowed builds."""
+    candidates: list[Path] = []
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if base:
+        candidates.append(Path(base) / "CVAnalysis" / "logs")
+    candidates.append(Path(tempfile.gettempdir()))
+    for directory in candidates:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            probe = directory / ".cvanalysis_startup_probe"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return directory / "startup_error.log"
+        except Exception:
+            continue
+    return Path(tempfile.gettempdir()) / "cvanalysis_startup_error.log"
+
+
+_STARTUP_LOG = _startup_log_path()
+try:
+    _CRASH_STREAM = _STARTUP_LOG.open("a", encoding="utf-8")
+    faulthandler.enable(_CRASH_STREAM)
+except Exception:
+    _CRASH_STREAM = None
+
+
+def _append_startup_log(details: str) -> None:
     try:
-        from PySide6.QtWidgets import QApplication
-        from cv_gui import CVAnalysisGUI
-        
-        print("启动CV数据分析工具...")
+        with _STARTUP_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}]\n")
+            stream.write(details)
+            stream.write("\n")
+    except Exception:
+        pass
+
+
+def _native_message(title: str, text: str) -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)
+    except Exception:
+        pass
+
+
+def _report_startup_failure(details: str) -> None:
+    _append_startup_log(details)
+    try:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
         app = QApplication.instance() or QApplication(sys.argv)
-        window = CVAnalysisGUI()
-        window.show()
-        
-        print("应用已启动，窗口正在显示...")
-        sys.exit(app.exec())
-        
-    except Exception as e:
-        print(f"错误：无法启动应用")
-        print(f"详情：{type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        QMessageBox.critical(
+            None,
+            "CVAnalysis 启动失败",
+            f"{details}\n\n日志: {_STARTUP_LOG}",
+        )
+        return
+    except Exception:
+        pass
+    _native_message(
+        "CVAnalysis 启动失败",
+        f"{details}\n\n日志: {_STARTUP_LOG}",
+    )
+    if sys.stderr is not None:
+        try:
+            sys.stderr.write(details + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+
+def main() -> None:
+    try:
+        from cvanalysis.ui.app import run
+
+        raise SystemExit(run())
+    except SystemExit:
+        raise
+    except Exception:
+        _report_startup_failure(traceback.format_exc())
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
-    run_gui()
+    main()

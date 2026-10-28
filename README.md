@@ -1,585 +1,252 @@
-# CV Analysis Tool - 循环伏安数据分析工具
+# CVAnalysis v2
 
-[English](#english) | [中文](#中文)
+电化学工作站数据分析工作区，面向 CHI660E 导出的 CV 与 EIS 数据，支持多文件批量分析、扫速/电位相关分析、EIS 等效电路拟合，以及日常分析和 IEEE 论文风格绘图预设。
+
+[中文](#中文) | [English](#english)
+
+---
 
 ## 中文
 
-### 📋 项目简介
+### 1. 主要功能
 
-**CV Analysis Tool** 是一个功能全面的循环伏安（Cyclic Voltammetry, CV）实验数据分析工具，主要用于处理和分析由CHI660E电化学工作站导出的CV实验数据。该工具提供了友好的图形化用户界面，可以自动计算电容值、进行统计分析，并生成高质量的数据可视化图表。
+- **多文件数据集**：一次导入多个 CV / EIS / CP 文件；单个文件失败不会中断整批导入。
+- **长文件名处理**：文件名超过显示上限时自动缩短，完整文件名、路径、扫速/窗口等细节显示在左侧详情区。
+- **循环级控制**：数据集树中可勾选文件或单个循环；勾选会即时更新开启“跟随勾选”的图。
+- **每图独立数据选择**：图标签页顶部“数据 (N)...”可选择本图绘制的文件和 CV 循环；修改数据选择后自动停止跟随，勾选“跟随勾选”可恢复即时同步。
+- **图例模板**：可为数据设置默认别名模板（如 `{file_n}-{cycle_n}`），也可在当前图单独覆盖；模板支持文件序号 `{file_n}`、文件内原始循环号 `{cycle_n}`，以及 `{File_Name}`、`{Scan_Rate}`、`{CV_Window}`、`{Cycle_Number}`、`{Low_Freq}` 等字段。
+- **可拖拽布局与列宽**：数据集、左下角 CV/EIS/CP 结果表、日志和右侧当前图设置之间均可拖动分隔条；数据树、结果表和每图数据对话框的所有列均可拖动，双击列边界或右键表头可自动适配。窗口几何、分隔比例和列宽会被记住。
+- **当前图自定义选项**：分析参数、坐标范围和论文排版固定在主窗口右下方，底栏默认约 400 px 高；左侧结果表、中间日志和右侧设置可拖动调整宽度并记住。切换图时设置跟随切换。电容–扫速支持一次函数、坐标直线、幂律和不拟合；X/Y 轴可分别自动、线性或对数选择，误差棒和拟合线独立开关。
+- **手动坐标范围**：所有图均可分别指定 X/Y 最小值和最大值，留空表示自动。单图显示一个范围栏目；Bode、EIS 拟合等双子图分别显示上下图栏目；CP 容量-循环的左右双 Y 轴也分开设置，右轴只设 Y 范围并与左轴共享 X。范围随项目保存，导出 PNG/PDF/SVG/TIFF 时同样生效。Nyquist 图的手动范围优先于等比例坐标；未设置范围时，仅当 Z'/Z'' 跨度比不超过约 4:1 才强制等比例，避免高频过滤后出现大面积空白。
+- **显示单位与标尺**：EIS 阻抗可在自动、Ω、kΩ、MΩ、mΩ 间切换（按面积归一化时为 Ω·cm² 系列）；CV/CP 电流可在自动、A、mA、µA、nA、pA 间切换。单位选择位于“坐标范围”页，范围输入会显示当前单位；切换单位并应用后，已有手动范围按物理值自动换算。对数轴的 X/Y 主刻度可分别选择默认、科学计数法（10 的幂）或小数，设置作用于当前图中相应方向的全部对数轴，并随项目保存。单坐标轴图可勾选“强制 X/Y 刻度间隔一致”，让两轴使用相同主刻度步长；间隔可留空自动选择，也可手动输入数值（如 100），避免某一轴刻度过密。手动间隔随显示单位自动换算。
+- **紧凑排版**：最终坐标范围、单位和刻度确定后才执行统一排版，避免自动范围的长刻度标签在切换到手动范围后留下大块左边距；论文图内/图外图例重排幂等，不会重复叠加图例。
+- **上/右边框刻度**：显示上/右边框时可分别关闭上边框刻度或右边框刻度；边框隐藏时对应刻度自动隐藏，主刻度和次刻度同时生效。
+- **论文缩放补偿**：输入图片占版心宽度比例（0.5/0.33/0.25）、版心宽度和正文字号（默认 10 pt）。按“论文目标字号 ÷ 插入缩放比例”计算源图字体；占比严格小于 0.33 时，为保证固定画布可排版，所有图中文字再缩至计算值的 80%。界面显示源图字号和论文实际字号，详见 [修正报告](docs/PROJECT_REVIEW.md)。
+- **图例布局**：可设自动、图内或图外，自动外置阈值默认 0.5；图例列数可自动适配或手动设为 1–8 列。外置图例根据坐标轴结构安排在底部、顶部或拟合图右侧，多坐标轴共享并合并重复图例项。
+- **多选与清空**：支持 Ctrl/Shift 多选、全选、删除选中和一键清空当前数据集（不删除源文件）。
+- **CV 快速分析**：电容-扫速曲线、固定电位电流-扫速、b 值、Trasatti 电荷分解、Dunn 电流分解，以及不同扫速下的贡献占比柱状图。
+- **面积/质量归一化**：支持 F/cm²、F/g、mA/cm²、A/g、C/cm²、C/g。
+- **EIS 快捷分析**：自动估算 Rs、Rct、f_peak、Cdl、τ、低频 |Z|、1 Hz 相位；支持 Nyquist/Bode 和频率范围过滤。
+- **EIS 拟合**：自动推荐模型，支持 `Rs-(Rct||CPE)`、`Rs-(Rct||C)`、`Rs-CPE`、`Rs-C`，输出参数、标准误、R²、RMSE 和残差图。
+- **CP / GCD 分析**：支持 CHI Chronopotentiometry 的 `Time/sec, Potential/V` 主区和可选 `Hold Time/sec, Current/A` 保持段。GCD 电位-时间图可选自动补全高/低电位保持平台；容量-循环图显示充电/放电容量和库仑效率，并汇总比容量、IR 降、能量和功率指标。保持段容量是否计入可单独开关。
+- **绘图预设**：日常分析、IEEE 单栏、IEEE 双栏、演示/组会、论文/学位论文；IEEE/论文样式默认 Arial，支持用户预设保存和 JSON 导入/导出。
+- **快捷绘图参数**：非默认预设会弹出参数窗口，可调坐标区比例、线宽、X/Y 轴字体、图例/注释/网格、上/右边框及其刻度等；支持“应用（仅当前图）”和“保存到配置（覆盖/另存为）”。
+- **绘图区右键菜单**：检测当前图实际使用的颜色（含线条及标记填充/边缘，文字颜色在最后），可修改当前图颜色、画布比例、元素样式，或按比例适应标签页；可复制当前图像（PNG）或当前矢量图（SVG，可粘贴到 Word/PowerPoint/Illustrator 等）。预览默认按比例居中适配且不裁切。柱状图等还会提供柱宽、透明度等控件。
+- **统一画布基准**：所有预设使用 3.2 in 逻辑高度，画布宽度由宽高比计算。预览与导出共用逻辑宽高比；界面缩放只改变预览 DPI，不改变画布布局。
+- **项目与导出**：`.cvproj` 项目保存/恢复；PNG/PDF/SVG/TIFF 图像导出；PNG/TIFF 导出时可单独设置 72–1200 DPI，PDF/SVG 的矢量图元可无损缩放，DPI 只影响其中的栅格图层；分析结果 CSV 批量导出。
+- **高 DPI**：界面基础字号 11pt，并提供界面缩放倍数设置（0.8–1.6），适配高分辨率屏幕。
+- **绘图交互**：matplotlib 缩放/平移工具栏、图例/坐标轴/注释开关、循环重编号。
+- **日志与错误处理**：导入、解析、拟合、导出和异常统一记录到日志面板和旋转日志文件。
 
-**主要特性：**
-- ✅ 自动解析CHI660E导出的CV数据文件
-- ✅ 智能计算每轮循环的面积和电容值
-- ✅ 离群值自动检测和排除
-- ✅ 实时数据可视化（V-I曲线）
-- ✅ 多格式图表导出（PNG、SVG）
-- ✅ 完整的统计分析和数据汇总
-- ✅ 可自定义的绘图配置
-- ✅ 支持不同颜色序列（默认颜色和xkcd颜色）
-- ✅ 支持随机种子确定颜色序列
-- ✅ 支持通过复选框选择需要绘图的轮次
-- ✅ 跨平台支持（Windows、macOS、Linux）
+### 2. 安装与启动
 
-### 🆕 新功能
+要求 **Python 3.11+**。
 
-#### 1. 颜色序列配置
-- **默认颜色**：使用matplotlib的tab10/tab20颜色映射，适合大多数情况
-- **xkcd颜色**：使用xkcd颜色库，提供更丰富的颜色选择
-- **随机种子**：通过配置随机种子，可以生成可重复的颜色序列
-- **deltaE最小值**：在xkcd模式下，确保颜色之间的可区分性
-
-#### 2. 复选框选择轮次
-- 在循环结果表格中，每个循环都有一个复选框
-- 可以勾选需要在图表中显示的循环
-- 未勾选的循环将不会在V-I曲线图中显示
-- 方便对比特定循环或排除异常循环
-
-#### 3. 颜色配置对话框
-- 通过"绘图配置"按钮打开配置对话框
-- 可以设置颜色模式（默认/xkcd）
-- 可以设置随机种子和deltaE最小值
-- 支持启用/禁用随机颜色生成
-
-### 🚀 快速开始
-
-#### 系统要求
-- Python 3.8+
-- pip 包管理器
-
-#### 安装步骤
-
-1. **克隆仓库**
-```bash
-git clone https://github.com/ShenKira/CHI-CVAnalysis.git
-cd CHI-CVAnalysis
-```
-
-2. **创建虚拟环境**（可选但推荐）
-```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
-
-# macOS/Linux
-python -m venv venv
-source venv/bin/activate
-```
-
-3. **安装依赖**
 ```bash
 pip install -r requirements.txt
-```
-
-4. **运行应用**
-```bash
 python start_gui.py
 ```
 
-### 📖 使用指南
+测试：
 
-#### 基本操作
-
-1. **启动应用**
-   ```bash
-   python start_gui.py
-   ```
-   
-2. **导入数据文件**
-   - 点击界面中的"导入CV数据文件"按钮
-   - 选择CHI660E导出的txt格式数据文件
-   - 应用将自动解析并提取CV实验数据
-
-3. **查看分析结果**
-   - **左侧面板**：显示每一轮循环的详细数据
-     - 循环编号
-     - 循环面积（单位：C，库伦）
-     - 电容值（单位：mF，毫法）
-   - **下方文本区域**：显示完整的实验参数和统计结果
-     - 初始电压、最高/最低电压
-     - 扫描速率、电极面积、灵敏度等
-     - 有效循环数、平均电容值、标准差等
-
-4. **数据可视化**
-   - **右侧图表**：实时显示所有循环的V-I曲线
-   - 每个循环用不同颜色区分
-   - 支持多种颜色序列：
-     - **默认颜色**：使用matplotlib的tab10/tab20颜色映射
-     - **xkcd颜色**：使用xkcd颜色库，支持随机种子生成可重复的颜色序列
-   - **复选框选择**：在表格中每个循环都有复选框，可以勾选需要在图表中显示的循环
-   - 包含图例、坐标轴标签和网格线
-
-5. **导出结果**
-   - **保存为PNG**：导出高分辨率图像（300 dpi）
-   - **保存为SVG**：导出矢量图，便于后续编辑
-
-#### 关键参数说明
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `sensitivity_threshold_factor` | 电流超出多少倍灵敏度时发出警告 | 10 |
-| `outlier_count` | 排除最离群值的个数 | 1 |
-| `electrode_area` | 电极面积（cm²） | 0.01 |
-
-这些参数可以在初始化 `CVAnalyzer` 类时修改。
-
-#### 复选框选择轮次使用说明
-
-1. **查看循环结果**：导入数据后，左侧面板会显示所有循环的详细数据
-2. **勾选循环**：在表格的最后一列（"绘图"列）中，每个循环都有一个复选框
-3. **选择显示**：勾选需要在图表中显示的循环，未勾选的循环将不会在V-I曲线图中显示
-4. **实时更新**：勾选状态改变时，图表会自动更新
-5. **对比分析**：可以勾选特定循环进行对比分析，或排除异常循环
-
-#### 颜色序列配置使用说明
-
-1. **打开配置**：点击右上角的"绘图配置"按钮
-2. **选择颜色模式**：
-   - **默认颜色**：使用matplotlib的标准颜色映射
-   - **xkcd颜色**：使用xkcd颜色库，提供更丰富的颜色选择
-3. **设置随机种子**：在xkcd模式下，可以设置随机种子以生成可重复的颜色序列
-4. **设置deltaE最小值**：确保颜色之间的可区分性（默认20.0）
-5. **启用随机**：勾选后，系统会根据随机种子生成颜色序列
-
-### 📊 项目结构
-
-```
-CV-Analysis-Tool/
-├── cv_analysis.py              # 核心分析模块 - 数据处理和计算
-├── cv_gui.py                   # GUI主窗口 - PySide6主应用
-├── start_gui.py                # 启动脚本 - 程序入口
-├── config_manager.py           # 配置管理器 - 处理config.json
-├── plot_manager.py             # 绘图管理器 - V-I曲线绘制和导出
-├── data_display.py             # 数据展示模块 - UI数据更新
-├── plot_config_dialog.py       # 绘图配置对话框 - 字体样式设置
-├── ui_components.py            # UI组件库 - 可复用UI元素
-├── colours.py                  # 颜色管理模块 - xkcd颜色序列生成
-├── config.json                 # 配置文件 - 绘图样式和颜色配置
-├── requirements.txt            # 依赖列表
-├── tests/                      # 测试目录
-│   └── test_cv_data.txt       # 测试数据样本
-├── docs/                       # 文档目录
-│   └── README.md              # 详细文档
-└── README.md                  # 本文件
+```bash
+pytest tests_v2
 ```
 
-### 🔧 核心功能模块
+Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命令和故障排查见 [Build.md](Build.md)。
 
-#### CVAnalyzer（cv_analysis.py）
-负责核心数据分析：
-- 解析CHI660E导出的txt数据文件
-- 提取电势和电流数据
-- 计算每个循环的面积和电容值
-- 进行离群值检测和排除
-- 生成统计结果
+如果窗口化启动失败且没有错误弹窗，可查看启动日志（路径和诊断方法见 [Build.md](Build.md)）。应用不再恢复 Qt 保存的 dock 图，只恢复窗口几何、分隔条尺寸和列宽，以避免旧的停靠布局导致启动访问冲突。仍可设置 `CVANALYSIS_DISABLE_LAYOUT_RESTORE=1` 跳过窗口几何恢复。
 
-#### CVAnalysisGUI（cv_gui.py）
-主图形用户界面：
-- 整合所有模块的功能
-- 提供文件导入对话框
-- 实时显示分析结果
-- 管理用户交互
+### 2.1 版本与升级
 
-#### PlotManager（plot_manager.py）
-数据可视化和导出：
-- 绘制V-I曲线图
-- 支持多循环彩色区分
-- 导出为PNG（300 dpi）
-- 导出为SVG矢量格式
-- 复制图表到剪贴板
+- 自 v2.0.0 起，`main` 为 v2 工作区；v1 代码存档在 `v1-archive` 分支和 `v1.1` / `v1.2.3` / `v1.3.0` tags。
+- 已有 v1 克隆：没有本地修改时执行 `git pull --ff-only`；有修改时先提交到自己的分支或备份，再更新；不确定时直接重新 clone。
+- 旧 GUI 已移除；v1 `config.json` 会自动迁移为 v2 配置。
 
-#### ConfigManager（config_manager.py）
-配置文件管理：
-- 读取和保存config.json
-- 管理绘图样式参数
-- 自动创建默认配置
+### 3. 基本工作流
 
-### 📦 依赖说明
+1. **导入**：点击“导入数据文件”，可多选 CV/EIS/CP 文件。坏文件会记录到日志，不影响其他文件。
+2. **查看数据集**：左侧数据集树显示短文件名、扫速、电压窗口、循环数和统计值；完整文件名/路径和细节显示在树下方。
+   - 勾选文件/循环会即时更新右侧所有开启“跟随勾选”的图；Ctrl/Shift 多选；支持全选、删除选中、清空数据。
+   - 双击文件或右键“绘制”会创建一个只包含该数据的独立图，默认不跟随勾选。
+   - 右键还可设置电极面积/活性物质质量、设置数据图例模板或删除数据。
+   - 可拖动一个或多个文件，在同一 CV/EIS/CP 分组内重新排序；勾选、循环选择和当前图的数据选择保留。绘图顺序与文件序号同步更新，顺序随项目保存。
+   - 拖动树和下方详情区之间的分隔条可调整占比。
+3. **每图选择数据**：图标签页顶部“数据 (N)...”打开数据选择对话框，可勾选本图要绘制的文件和 Cycle，可批量设置本图图例模板；只影响当前图。修改数据选择后会自动关闭“跟随勾选”；仅修改图例模板时保持跟随。需要恢复即时同步时重新勾选图顶部的“跟随勾选”。
+4. **设置图例别名**：在数据集树右键选择“设置数据图例模板...”，或使用“工具 → 设置数据图例模板...”。例如：
+   - `{CV_Voltage}-{Cycle_Number}` → `1.5V-1`、`1.5V-2` ...
+   - `{Sample_Name}-{Scan_Rate}` → `样品A-0.01V/s`
+   - `{file_n}-{cycle_n}` → 第 2 个文件的第 3 个循环显示为 `2-3`。
+   - `{file_n}` 按数据集树当前顺序从 1 开始，CV 后接 EIS；同一源文件的多组数据共用序号。单张图只选择部分文件时，仍使用整个数据集的文件序号。
+   - 字段大小写不敏感；CV 叠加图中模板包含 `{cycle_n}` 或 `{Cycle_Number}` 时会逐循环显示图例，否则每个数据只显示一个图例。
+   - 勾选“显示时重编号循环”后，`{Cycle_Number}` 在每个数据内从 1 开始连续编号。
+   - `{cycle_n}` 始终使用文件内原始循环号，不受筛选循环或显示重编号影响。
+   - 数据级模板作为默认值；单张图可在“数据...”对话框中覆盖，留空则继承默认值。
+5. **快速分析**：右侧“分析与参数”面板顶部选择归一化，CV/EIS/CP 标签提供相应参数和分析按钮，“显示”管理图例、坐标轴和注释。CP 标签可设置“电位-时间自动补全保持区间”和“容量计入恒压保持段”。顶部工具栏的“CV 分析 / EIS 分析 / CP / GCD 分析”为分类下拉菜单。CV/EIS/CP 结果表位于左下角、数据树下方；表格首次按内容适配，之后保留手动列宽。“适配列宽”按钮可重新适配当前结果表，“视图 → 重置布局”可恢复默认布局和列宽。
+    - 右下角“当前图”面板的“坐标范围”页可手动设置 X/Y 范围，并在页首切换 EIS 阻抗或 CV/CP 电流单位；范围输入会标注当前单位。多个子图或双 Y 轴会分成独立栏目；留空即自动，对数轴必须输入正数。修改后点击“应用到当前图”，单位切换会自动换算已有范围。
+6. **切换预设**：顶部“预设”下拉框切换日常/IEEE 等风格；“应用到全部”统一所有图。选择非日常预设时会弹出当前图的快速参数窗口（坐标区比例、线宽、X/Y 轴字体、图例/注释/网格等）。
+   - “应用”：立即生效，只影响当前图，不写入配置。
+   - “保存到配置”：先应用，再选择覆盖当前预设或另存为新预设；覆盖前会提醒。内置预设被覆盖时会创建同名用户覆盖，删除用户覆盖即可恢复内置样式。
+7. **EIS 拟合**：选择 EIS 文件和频率范围，模型选“自动”或指定模型，点击“拟合当前 EIS”。拟合结果、残差和参数显示在新标签页与结果表。
+8. **导出**：每个图标签页可单独导出 PNG/PDF/SVG/TIFF；文件菜单可批量导出分析 CSV。
+9. **保存项目**：`Ctrl+S` 直接保存当前 `.cvproj`；新项目首次保存或使用“项目另存为...”时选择路径（`Ctrl+Shift+S`）。保存数据源路径、电极参数、显示选择、每图数据选择、跟随勾选状态、图例模板、绘图标签和预设。有未保存修改时窗口标题带 `*`，关闭、清空数据或打开其他项目前会提示保存。
 
+### 4. 内置绘图预设
+
+| 预设 | 用途 | 主要特点 |
+|---|---|---|
+| 日常分析 | 快速查看 | 较大字号、网格、统计注释 |
+| IEEE 单栏 | 期刊单栏 | 8 pt、刻度朝内、无网格、PNG 600 dpi |
+| IEEE 双栏 | 期刊双栏 | 9 pt、无网格、色盲友好配色、PNG 600 dpi |
+| 演示/组会 | PPT | 大字号、粗线、网格 |
+| 论文/学位论文 | 论文插图 | 6 in 宽、12 pt、细网格、色盲友好配色 |
+
+预设可编辑并保存为用户预设；支持 JSON 导入/导出，便于课题组共享统一样式。旧项目和预设的宽高会保留比例并归一到 3.2 in 高；不再提供手动输入画布宽高。IEEE 单栏/双栏和论文样式默认使用 Arial（Helvetica 缺失时回退 DejaVu Sans），轴标签/刻度/图例使用常规字重，标题只在启用时显示。快捷参数窗口中的“应用”不写配置，“保存到配置”才持久化；覆盖会二次确认。
+
+### 5. 算法说明
+
+#### CV
+
+- 循环分割：优先使用电位拐点 + prominence 过滤的稳健算法；设置中可切换为 v1 兼容算法。首个循环若从非极限电位起始会被标记为不完整并警告，但默认仍参与统计。
+- 循环面积：正扫/反扫分支插值后梯形积分。
+- 循环电容：`C = Area / (2 × scan_rate × ΔV)`，与 v1 公式一致。
+- 统计：有效循环平均、标准差、变异系数。默认按偏离程度固定裁剪 1 个循环（旧版兼容）；设置中可改为 z-score 阈值模式，只排除 `|z|` 超过阈值的循环。
+- 固定电位电流：在目标电位处对正扫/反扫分支插值，取循环中位数。
+- b 值：`log|i| = b log v + log a`，支持 2 个及以上扫速，建议至少 3 个。当前图可切换电流来源：正扫支路、反扫支路或旧版平均绝对电流（默认，兼容旧项目）。
+- Trasatti：`q = q_cap + k v^(-1/2)`，其中 `q = C × 实际积分窗口宽度`（缺失时回退文件窗口）。不同文件窗口不一致时只警告，不静默丢弃；同时给出 `q–v^(1/2)` 外推的 `q_total` 和 `q_outer/q_total`（保留旧的低扫速占比字段）。
+- Dunn：对正扫支路在共同电位窗口逐点拟合 `i(V) = k1 v + k2 v^(1/2)`，以 `i/√v` 对 `√v` 做标准线性化回归。两个 Dunn 图共用按电容/扩散分量绝对面积之和计算的占比。
+  - “Dunn 电流分解”图的横轴是电位，纵轴是电流（总电流/电容电流/扩散电流），指定扫速下查看。
+  - “贡献占比-扫速”图积分共同电位窗口内两个拟合分量的绝对面积，再按两者之和归一化为互补的 0–100% 堆叠柱。若两个拟合分量在部分电位相互抵消，这表示分量幅值构成，不等同于净实测电流面积的百分比。
+
+电容–扫速拟合模式含义：一次函数在原始数据上拟合 `C = m·v + b`，轴类型只改变显示；坐标直线会按所选 X/Y 轴变换拟合，使最终图像中的线保持直线；幂律拟合 `C = a·vⁿ`。拟合图例按最终图形显示为 `Fitted Line` 或 `Fitted Curve`。各轴“自动”模式在数据全为正且范围跨 20 倍以上时选择对数轴，其余使用线性轴；纵轴自动模式还会检查误差棒下界。选项中会显示当前自动解析结果。幂律与对数-对数轴下的坐标直线数学上等价。
+
+> 扫速分析要求各文件电压窗口一致或高度重叠；Dunn 至少需要两个不同扫速，建议三个以上。
+
+#### EIS
+
+- Rs：高频端最小实部估计；拟合时作为独立参数。
+- Rct：半圆峰值 `2 × max(-Z'')` 的几何估计，或由拟合给出。
+- f_peak：`-Z''` 最大值对应频率。
+- Cdl：`1 / (2π f_peak Rct)`（几何估计）；CPE 模型使用有效电容换算。
+- 拟合模型：
+  - `Rs-(Rct||CPE)`：`Z = Rs + 1 / (1/Rct + Q(jω)^n)`
+  - `Rs-(Rct||C)`：理想 RC 半圆
+  - `Rs-CPE`：阻塞电极/超电容，`Z = Rs + 1/(Q(jω)^n)`
+  - `Rs-C`：理想串联电容
+- 自动模型：检测到完整半圆时推荐 `Rs-(Rct||CPE)`，否则推荐 `Rs-CPE`。
+- 拟合使用相对残差和软 L1 损失，报告 R²、RMSE、参数标准误和警告。低频扩散尾部明显时，建议限定拟合频率范围或使用 `Rs-CPE`。
+- EIS 阻抗只支持面积归一化（Ω·cm² 系列）；选择质量归一化会回退原始阻抗并给出警告。面积归一化时图内 Rs/Rct 注释同样换算为 Ω·cm²。
+
+#### CP / GCD
+
+- CHI Chronopotentiometry 主区为 `Time/sec, Potential/V`；可选 `Hold Time/sec, Current/A` 块记录高/低电位保持期间的电流，保持时间不一定包含在主时间轴内。
+- 活动电流段：用电位极值（prominence 过滤）分段并合并同一方向的小噪声段；充电/放电方向默认按“电位上升=充电”判断（适用于正极/全电池；负电极半电池需要外部统一符号），电流幅值优先取 `Cathodic Current`/`Anodic Current`。
+- “自动补全保持区间”：按保持电流正负匹配段的结束限值，将保持段插入电位-时间曲线，并把平台吸附到高/低限值（仅在 5% 窗口内）。保持段数量与分段数相等时，先验证顺序映射的极性；矛盾时按段末电位重匹配，找不到同极性记录时不再强行回退。原始数据不被修改，补全只用于绘图/分析派生序列。
+- GCD 循环：充电段后紧邻的放电段组成一个循环；开头单独放电段不计入。
+- 容量：默认 `Q = |I| × t` 只统计恒流活动段；开启“容量计入恒压保持段”后加上保持段电流积分。
+- 比容量：`Q_dis / m`（换算为 mAh/g）；面积容量：`Q_dis / A`（mAh/cm²）；库仑效率：`Q_dis / Q_chg × 100%`。
+- IR 降：放电初段的最大电位台阶；能量：`∫V·I dt`，可换算 Wh/kg 与 W/kg。
+- 保持段记录不足或无法匹配时只显示警告，不强行补全；建议在图中结合原始电位-时间曲线核对。
+
+### 6. 兼容性与清理说明
+
+- **配置**：首次运行会自动把 v1 `config.json` 迁移为 v2，并生成 `config.json.v1.bak`（`.gitignore` 已排除）。
+- **v1 字段镜像**：`config.json` 仍保留 `plot`、`colors`、`eis_plot`、`axis`、`grid`、`tick` 顶层字段，便于旧配置工具读取。
+- **旧数据**：继续支持 CHI660E 逗号/Tab/空格/带引号 CSV，并增加编码回退。
+- **旧 CLI / Python API**：
+  ```bash
+  python cv_analysis.py <CV文件>
+  python eis_analysis.py <EIS文件>
+  ```
+  `CVAnalyzer`、`EISAnalyzer` 仍可从根目录模块导入，内部由 `cvanalysis.compat` 适配。
+- **旧 GUI 已移除**：`cv_gui.py`、`plot_manager.py`、`data_display.py`、`ui_components.py`、`plot_config_dialog.py`、`config_manager.py`、`start_gui_legacy.py` 已清理，旧版本请从备份获取。v2 只维护当前工作区 GUI。
+- **项目/预设格式**：均带版本号；未知字段保留，新增字段有默认值。
+
+### 7. 项目结构
+
+```text
+cvanalysis/
+  domain/       数据模型、SI 单位、异常
+  io/           CHI 解析器、解析器注册表
+  analysis/     CV/EIS/CP 分析、等效电路拟合、GCD 指标
+  plotting/     样式预设、xkcd 颜色、CV/EIS/CP 渲染、导出
+  services/     数据集、设置迁移、项目、CSV 导出
+  ui/           工作区窗口、模型、控件、对话框、worker
+  compat/       v1 CVAnalyzer/EISAnalyzer 适配器
+cv_analysis.py      # v1 CLI / API 兼容入口
+eis_analysis.py     # v1 EIS CLI / API 兼容入口
+start_gui.py        # v2 GUI 入口
+tests_v2/           # 单元测试、绘图 smoke、GUI smoke
+docs/               # 开发文档
+build.bat           # Nuitka 打包脚本
 ```
-PySide6>=6.4.0        # GUI框架
-matplotlib>=3.5.0     # 数据可视化
-Pillow>=9.0.0         # 图像处理
-numpy>=1.21.0         # 数值计算
-```
 
-### ⚙️ 数据要求
+### 8. 已知限制
 
-导入的txt数据文件需要满足以下条件：
-1. ✓ 包含"Cyclic Voltammetry"字样（用于识别为CV实验）
-2. ✓ 包含"Potential/V, Current/A"表头
-3. ✓ 电势和电流数据格式正确
-4. ✓ 至少包含一个完整的循环（2个Segments）
+- EIS 自动 Rct/Cdl 是几何估计；非理想半圆应以拟合结果为准。
+- `Rs-CPE` 的 Rs 在缺少足够高频数据时可能不可辨识，界面会回退到高频最小实部并给出警告。
+- CP 默认按“电位上升=充电”解释；负电极半电池的充电/放电标签和库仑效率会反过来，当前版本不提供方向切换 UI。
+- EIS 阻抗不支持质量归一化；选择后会回退原始阻抗并警告。
+- Dunn/Trasatti 需要多个扫速和一致电压窗口；不一致时界面会警告，Trasatti 的 q 使用实际积分窗口宽度。
+- EIS 拟合对频率范围敏感；拟合前建议先检查 Nyquist/Bode 形态并关注 R²/RMSE 警告。
 
-### 📈 分析算法
+### 9. License
 
-#### 面积计算
-- 使用梯形积分法计算闭合循环的面积
-- 单位为库伦（C）
-
-#### 电容值计算
-$$C = \frac{A}{v \times A_{electrode}}$$
-
-其中：
-- $A$ = 循环面积（C）
-- $v$ = 扫描速率（V/s）
-- $A_{electrode}$ = 电极面积（cm²）
-- 结果单位：mF（毫法）
-
-#### 离群值排除
-- 使用Z-score统计方法
-- 自动排除偏离平均值最远的值
-- 可配置排除个数
-
-#### 灵敏度检验
-- 检查电流是否超过灵敏度范围
-- 警告并排除超限循环
-- 可配置灵敏度阈值倍数
-
-### 🎨 自定义配置
-
-编辑 `config.json` 修改绘图样式和颜色配置：
-
-```json
-{
-  "plot": {
-    "title": {
-      "fontsize": 20,
-      "bold": true
-    },
-    "xlabel": {
-      "fontsize": 14,
-      "bold": false
-    },
-    "ylabel": {
-      "fontsize": 14,
-      "bold": false
-    },
-    "legend": {
-      "fontsize": 12,
-      "bold": false
-    }
-  },
-  "colors": {
-    "mode": "default",        // 颜色模式："default" 或 "xkcd"
-    "random_seed": 42,         // 随机种子，用于生成可重复的颜色序列
-    "delta_e_min": 20.0,       // xkcd颜色模式下的最小deltaE值
-    "enable_random": false     // 是否启用随机颜色生成
-  }
-}
-```
-
-### 📝 数据导出
-
-支持多种格式导出分析结果图表：
-
-| 格式 | 分辨率 | 用途 | 文件大小 |
-|------|--------|------|---------|
-| PNG | 300 dpi | 文档、演示、网页 | 中等 |
-| SVG | 矢量 | 编辑、出版、高清 | 小 |
-
-### 🐛 故障排除
-
-| 问题 | 解决方案 |
-|------|--------|
-| `ModuleNotFoundError: No module named 'PySide6'` | 运行 `pip install -r requirements.txt` |
-| 无法打开文件 | 确保文件编码为UTF-8，包含CV数据 |
-| 图表显示不完整 | 检查matplotlib后端配置 |
-| 字体显示不正确 | 确保系统安装了Times New Roman字体 |
-
-### 🤝 贡献指南
-
-欢迎提交Issue和Pull Request！
-
-1. Fork本仓库
-2. 创建特性分支：`git checkout -b feature/AmazingFeature`
-3. 提交更改：`git commit -m 'Add some AmazingFeature'`
-4. 推送到分支：`git push origin feature/AmazingFeature`
-5. 开启Pull Request
-
-### 📄 许可证
-
-本项目采用MIT许可证。详见 [LICENSE](LICENSE) 文件。
-
-### 📧 联系方式
-
-- 问题报告：[GitHub Issues](https://github.com/ShenKira/CHI-CVAnalysis/issues)
-- GitHub: [ShenKira](https://github.com/ShenKira)
-
-### 🙏 致谢
-
-感谢所有贡献者和使用者的支持！
+MIT，详见 [LICENSE](LICENSE)。
 
 ---
 
 ## English
 
-### 📋 Project Overview
+### Overview
 
-**CV Analysis Tool** is a comprehensive cyclic voltammetry (CV) experimental data analysis application, primarily designed to process and analyze CV data exported from CHI660E electrochemical workstations. The tool provides a user-friendly graphical interface for automatic calculation of capacitance values, statistical analysis, and generation of high-quality data visualizations.
+CVAnalysis v2 is a layered Qt workspace for CHI660E CV/EIS/CP data. It supports multi-file datasets, cycle-level visualization, scan-rate analyses, rapid EIS metrics and equivalent-circuit fitting, GCD capacity/efficiency analysis with optional hold-interval completion, and one-click switching between daily-analysis and IEEE paper plot presets.
 
-**Key Features:**
-- ✅ Automatic parsing of CHI660E exported CV data files
-- ✅ Intelligent calculation of area and capacitance for each cycle
-- ✅ Automatic outlier detection and exclusion
-- ✅ Real-time data visualization (V-I curves)
-- ✅ Multi-format figure export (PNG, SVG)
-- ✅ Comprehensive statistical analysis and data summary
-- ✅ Customizable plot configuration
-- ✅ Support for different color sequences (default colors and xkcd colors)
-- ✅ Support for random seed to determine color sequence
-- ✅ Support for selecting cycles to plot via checkboxes
-- ✅ Cross-platform support (Windows, macOS, Linux)
+### Install and run
 
-### 🆕 New Features
-
-#### 1. Color Sequence Configuration
-- **Default colors**: Using matplotlib's tab10/tab20 color maps, suitable for most cases
-- **xkcd colors**: Using xkcd color library, providing richer color selection
-- **Random seed**: Generate reproducible color sequences through random seed configuration
-- **DeltaE minimum**: Ensure color distinguishability in xkcd mode
-
-#### 2. Checkbox Selection of Cycles
-- Each cycle has a checkbox in the cycle results table
-- Can select which cycles to display in the chart
-- Unchecked cycles will not be shown in the V-I curve plot
-- Convenient for comparing specific cycles or excluding abnormal cycles
-
-#### 3. Color Configuration Dialog
-- Open configuration dialog via "Plot Configuration" button
-- Can set color mode (default/xkcd)
-- Can set random seed and deltaE minimum value
-- Supports enabling/disabling random color generation
-
-### 🚀 Quick Start
-
-#### System Requirements
-- Python 3.8+
-- pip package manager
-
-#### Installation
-
-1. **Clone the repository**
-```bash
-git clone https://github.com/ShenKira/CHI-CVAnalysis.git
-cd CHI-CVAnalysis
-```
-
-2. **Create virtual environment** (optional but recommended)
-```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
-
-# macOS/Linux
-python -m venv venv
-source venv/bin/activate
-```
-
-3. **Install dependencies**
 ```bash
 pip install -r requirements.txt
-```
-
-4. **Run the application**
-```bash
 python start_gui.py
+pytest tests_v2
 ```
 
-### 📖 User Guide
+Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Build.md) for build details and troubleshooting.
 
-#### Basic Operations
+### Version and upgrade
 
-1. **Launch the application**
-   ```bash
-   python start_gui.py
-   ```
-   
-2. **Import data file**
-   - Click "Import CV Data File" button
-   - Select a txt file exported from CHI660E
-   - The app will automatically parse and extract CV data
+- Starting with v2.0.0, `main` contains the v2 workspace; v1 is archived in the `v1-archive` branch and tags `v1.1`, `v1.2.3`, `v1.3.0`.
+- Existing v1 clones without local changes can run `git pull --ff-only`; commit or back up local changes first, or simply re-clone.
+- The legacy GUI is removed; v1 `config.json` is migrated automatically.
 
-3. **View analysis results**
-   - **Left panel**: Details for each cycle
-     - Cycle number
-     - Cycle area (unit: C, Coulombs)
-     - Capacitance (unit: mF, milliFarads)
-   - **Bottom text area**: Complete experiment parameters and statistics
-     - Initial voltage, max/min voltage
-     - Scan rate, electrode area, sensitivity
-     - Valid cycles, average capacitance, standard deviation
+### Main capabilities
 
-4. **Data visualization**
-   - **Right plot**: Real-time V-I curves for all cycles
-   - Different colors for different cycles
-   - Support for multiple color sequences:
-     - **Default colors**: Using matplotlib's tab10/tab20 color maps
-     - **xkcd colors**: Using xkcd color library, supports random seed for reproducible color sequences
-   - **Checkbox selection**: Each cycle has a checkbox in the table to select which cycles to display in the chart
-   - Includes legend, axis labels, and grid
+- Multi-file CV/EIS/CP import with shortened filenames, full-file details, per-run/per-cycle visibility, multi-select, delete-selected and clear-all.
+- CV: capacitance vs scan rate, current at fixed potential, b-value, Trasatti charge separation, Dunn current decomposition, and contribution percentage bars vs scan rate.
+- Normalization by electrode area or active mass.
+- EIS: Rs/Rct/f_peak/Cdl/τ estimates, Nyquist/Bode plots, frequency filtering.
+- EIS fitting: `Rs-(Rct||CPE)`, `Rs-(Rct||C)`, `Rs-CPE`, `Rs-C`; automatic model recommendation, parameter errors, R², RMSE and residual plots.
+- CP/GCD: CHI `Chronopotentiometry` import, optional hold-current block, optional hold-plateau completion in potential-time curves, capacity/specific capacity vs cycle, Coulombic efficiency, IR drop, energy and power metrics.
+- Categorized quick-analysis menus in the toolbar and menu bar: CV, EIS and CP/GCD.
+- Plot presets: daily, IEEE single column, IEEE double column, presentation, thesis; IEEE/thesis use Arial. Non-default presets open a quick parameter dialog with apply vs save-to-config semantics, aspect ratio, per-axis fonts, top/right border ticks and display toggles.
+- Manual X/Y limits for every plot, stored per project and applied to screen previews and exports. Separate sections are shown for Bode/fit subplots and for the secondary Y axis in CP capacity plots; empty values mean auto, and log axes require positive limits. On Nyquist plots manual limits take precedence over equal aspect; automatic equal aspect is used only when the Z'/Z'' span ratio is within about 4:1.
+- Display units and tick scale: EIS impedance can be fixed to auto, Ω, kΩ, MΩ or mΩ (area-normalized variants use Ω·cm²); CV/CP current can be fixed to auto, A, mA, µA, nA or pA. The selector lives on the axis-range page, range fields show the active unit, and switching units converts existing manual limits to preserve the physical range. Logarithmic X and Y major ticks can independently use the default format, powers of ten, or decimal numbers; the choice applies across subplots and is saved with the project. Single-axis plots can force identical X/Y major-tick intervals; leave the interval empty for automatic selection or enter a numeric value such as 100. Manual intervals follow display-unit changes.
+- Compact layout: the final layout runs only after limits, units and ticks are fixed, so long auto-range tick labels no longer leave a large left margin after switching to manual limits. Paper-mode legend rebuilding is idempotent and never stacks duplicate figure legends.
+- Top/right spine ticks can be disabled independently while keeping the spines visible; hiding a spine also hides its ticks (major and minor).
+- Plot-canvas context menu: detect used colors (line colors plus marker fill/edge, text colors last), edit current-plot colors, canvas aspect ratio, element styles, or fit the image to the tab; copy the current plot as PNG or as an SVG vector image for Word/PowerPoint/Illustrator; contextual controls include bar width and opacity.
+- `.cvproj` projects with `Ctrl+S` quick save and `Ctrl+Shift+S` Save As, PNG/PDF/SVG/TIFF export, CSV summary export.
+- High-DPI UI with an adjustable 0.8-1.6 interface scale.
 
-5. **Export results**
-   - **Save as PNG**: High-resolution image (300 dpi)
-   - **Save as SVG**: Vector format for further editing
+### Compatibility
 
-#### Key Parameters
+- v1 `config.json` is migrated automatically; v1 top-level style fields are mirrored.
+- Old CLI/API entry points `cv_analysis.py` and `eis_analysis.py` are preserved through `cvanalysis.compat`.
+- The old GUI and its UI modules were removed during the v2 cleanup; use the backup if the legacy GUI is required.
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `sensitivity_threshold_factor` | Factor for sensitivity threshold warning | 10 |
-| `outlier_count` | Number of outliers to exclude | 1 |
-| `electrode_area` | Electrode area (cm²) | 0.01 |
+### Scientific notes
 
-#### Checkbox Selection of Cycles Usage Guide
-
-1. **View Cycle Results**: After importing data, the left panel displays detailed data for all cycles
-2. **Check Cycles**: In the last column of the table ("Plot" column), each cycle has a checkbox
-3. **Select Display**: Check the cycles you want to display in the chart; unchecked cycles will not appear in the V-I curve plot
-4. **Real-time Update**: The chart automatically updates when checkbox states change
-5. **Comparative Analysis**: You can check specific cycles for comparison or exclude abnormal cycles
-
-#### Color Sequence Configuration Usage Guide
-
-1. **Open Configuration**: Click the "Plot Configuration" button in the upper right corner
-2. **Select Color Mode**:
-   - **Default colors**: Using matplotlib's standard color maps
-   - **xkcd colors**: Using xkcd color library, providing richer color selection
-3. **Set Random Seed**: In xkcd mode, you can set a random seed to generate reproducible color sequences
-4. **Set DeltaE Minimum**: Ensure color distinguishability (default 20.0)
-5. **Enable Random**: When checked, the system will generate color sequences based on the random seed
-
-### 📊 Project Structure
-
-```
-CV-Analysis-Tool/
-├── cv_analysis.py              # Core analysis module
-├── cv_gui.py                   # GUI main window
-├── start_gui.py                # Application entry point
-├── config_manager.py           # Configuration manager
-├── plot_manager.py             # Plot manager
-├── data_display.py             # Data display module
-├── plot_config_dialog.py       # Plot config dialog
-├── ui_components.py            # UI components library
-├── colours.py                  # Color management module - xkcd color sequence generation
-├── config.json                 # Configuration file - plot styles and color configuration
-├── requirements.txt            # Dependency list
-├── tests/                      # Test directory
-└── docs/                       # Documentation
-```
-
-### 📦 Dependencies
-
-```
-PySide6>=6.4.0        # GUI framework
-matplotlib>=3.5.0     # Data visualization
-Pillow>=9.0.0         # Image processing
-numpy>=1.21.0         # Numerical computing
-```
-
-### ⚙️ Data Requirements
-
-Imported txt data files must meet the following conditions:
-1. ✓ Contains "Cyclic Voltammetry" string
-2. ✓ Contains "Potential/V, Current/A" header
-3. ✓ Correct potential and current data format
-4. ✓ At least one complete cycle (2 Segments)
-
-### 📈 Analysis Algorithms
-
-#### Area Calculation
-- Trapezoid integration for enclosed cycle area
-- Unit: Coulombs (C)
-
-#### Capacitance Calculation
-$$C = \frac{A}{v \times A_{electrode}}$$
-
-Where:
-- $A$ = Cycle area (C)
-- $v$ = Scan rate (V/s)
-- $A_{electrode}$ = Electrode area (cm²)
-- Result unit: mF (milliFarads)
-
-#### Outlier Exclusion
-- Z-score statistical method
-- Automatic exclusion of values farthest from mean
-- Configurable exclusion count
-
-#### Sensitivity Check
-- Monitors if current exceeds sensitivity range
-- Warns and excludes over-limit cycles
-- Configurable sensitivity threshold factor
-
-### 🎨 Custom Configuration
-
-Edit `config.json` to customize plot styles and color configuration:
-
-```json
-{
-  "plot": {
-    "title": {
-      "fontsize": 20,
-      "bold": true
-    },
-    "xlabel": {
-      "fontsize": 14,
-      "bold": false
-    },
-    "ylabel": {
-      "fontsize": 14,
-      "bold": false
-    },
-    "legend": {
-      "fontsize": 12,
-      "bold": false
-    }
-  },
-  "colors": {
-    "mode": "default",        // Color mode: "default" or "xkcd"
-    "random_seed": 42,         // Random seed for reproducible color sequences
-    "delta_e_min": 20.0,       // Minimum deltaE value for xkcd color mode
-    "enable_random": false     // Whether to enable random color generation
-  }
-}
-```
-
-### 📝 Data Export
-
-Support multiple format exports:
-
-| Format | Resolution | Purpose | File Size |
-|--------|------------|---------|-----------|
-| PNG | 300 dpi | Documents, presentations, web | Medium |
-| SVG | Vector | Editing, publishing, high-quality | Small |
-
-### 🐛 Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| `ModuleNotFoundError: No module named 'PySide6'` | Run `pip install -r requirements.txt` |
-| Cannot open file | Ensure file is UTF-8 encoded and contains CV data |
-| Incomplete plot display | Check matplotlib backend configuration |
-| Font display incorrect | Ensure Times New Roman font is installed |
-
-### 🤝 Contributing
-
-Issues and pull requests are welcome!
-
-1. Fork the repository
-2. Create your feature branch: `git checkout -b feature/AmazingFeature`
-3. Commit your changes: `git commit -m 'Add some AmazingFeature'`
-4. Push to the branch: `git push origin feature/AmazingFeature`
-5. Open a Pull Request
-
-### 📄 License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) file for details.
-
-### 📧 Contact
-
-- Bug reports: [GitHub Issues](https://github.com/ShenKira/CHI-CVAnalysis/issues)
-- GitHub: [ShenKira](https://github.com/ShenKira)
-
-### 🙏 Acknowledgments
-
-Thank you to all contributors and users for your support!
+- CV capacitance uses `C = Area / (2 × scan_rate × ΔV)`, matching v1.
+- Scan-rate analyses require multiple files with compatible potential windows. Trasatti warnings are additive; legacy low-rate fractions remain available.
+- b-value current source defaults to the legacy average absolute current; choose forward/reverse branch explicitly for fixed-potential single-branch analysis.
+- CP charge/discharge direction defaults to potential-rise = charge and is not configurable in the UI; negative-electrode half-cells require external sign handling.
+- EIS impedance supports area normalization only; mass normalization falls back to raw impedance with a warning.
+- EIS geometric metrics are estimates; use fitting for non-ideal spectra and inspect fit quality.
