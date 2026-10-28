@@ -227,7 +227,8 @@ python -m pytest tests_v2 -q
 - 不要执行 `git clean` / `git reset --hard`；用户数据就在工作区。
 - `config.json` 已在 Git 索引中标记删除并加入 `.gitignore`；提交时确认它不再被跟踪。
 - 远端为 `origin https://github.com/ShenKira/CHI-CVAnalysis.git`。v1 已冻结；推荐保留 v1 tags，并用 `v1-archive` 分支 + `v2` 分支同步。
-- 推荐同步方式（**不 force-push**）：提交 v2 → 从 `origin/main` 建 `v1-archive` → 用 `git merge --no-ff -s ours origin/main` 保留 v2 文件树并把 v1.3.0 作为第二父提交 → 推送 `main`、`v2` 和 `v2.0.0` tag。
+- 推荐同步方式（**不 force-push**）：提交 v2 → 从 `origin/main` 建 `v1-archive` → 用 `git merge --allow-unrelated-histories --no-ff -s ours origin/main` 保留 v2 文件树并把 v1.3.0 作为第二父提交 → 推送 `main`、`v2` 和 `v2.0.0` tag。
+- 本仓库本地 v1.1 与远端 v1.3.0 是**两段 unrelated history**；不加 `--allow-unrelated-histories` 会报 `refusing to merge unrelated histories`。
 - 示例流程（确认 diff 后执行）：
 
 ```powershell
@@ -239,7 +240,7 @@ git fetch origin
 git branch v1-archive origin/main
 git push origin v1-archive
 
-git merge --no-ff -s ours origin/main -m "Merge v1.3.0 archive into v2.0.0; keep v2 tree"
+git merge --allow-unrelated-histories --no-ff -s ours origin/main -m "Merge v1.3.0 archive into v2.0.0; keep v2 tree"
 git branch v2
 
 git push origin main v2
