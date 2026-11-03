@@ -122,12 +122,49 @@ def _make_legend(figure, handles, labels, style, *, ncols, axis=None, loc="best"
     return legend
 
 
+def _legend_column_key(figure, labels, style, *, axis, loc, anchor, usable_width_fraction):
+    container_width = axis.bbox.width if axis is not None else figure.bbox.width
+    axis_index = figure.axes.index(axis) if axis is not None and axis in figure.axes else -1
+    anchor_key = tuple(anchor) if isinstance(anchor, (list, tuple)) else anchor
+    return (
+        tuple(str(label) for label in labels),
+        round(float(figure.get_figwidth()), 6),
+        round(float(figure.get_figheight()), 6),
+        round(float(figure.dpi), 4),
+        round(float(container_width), 4),
+        round(float(usable_width_fraction), 6),
+        round(float(style.legend_size), 6),
+        tuple(style.text_font_family()),
+        bool(style.legend_frame),
+        bool(style.legend_shadow),
+        axis_index,
+        loc,
+        anchor_key,
+    )
+
+
 def _choose_columns(figure, handles, labels, style, requested, *, axis=None, loc="best", anchor=None,
                     usable_width_fraction: float = 0.92):
     if not labels:
         return 1
     if requested != "auto":
         return min(max(1, int(requested)), len(labels))
+
+    key = _legend_column_key(
+        figure,
+        labels,
+        style,
+        axis=axis,
+        loc=loc,
+        anchor=anchor,
+        usable_width_fraction=usable_width_fraction,
+    )
+    cache = getattr(figure, "_paper_legend_column_cache", None)
+    if cache is None:
+        cache = {}
+        figure._paper_legend_column_cache = cache
+    if key in cache:
+        return cache[key]
 
     container_width = axis.bbox.width if axis is not None else figure.bbox.width
     max_columns = min(len(labels), MAX_PAPER_LEGEND_COLUMNS)
@@ -145,7 +182,9 @@ def _choose_columns(figure, handles, labels, style, requested, *, axis=None, loc
         bbox = _legend_bbox_in_figure(figure, legend)
         legend.remove()
         if container_width > 0 and bbox.width * figure.bbox.width <= container_width * usable_width_fraction:
+            cache[key] = ncols
             return ncols
+    cache[key] = 1
     return 1
 
 

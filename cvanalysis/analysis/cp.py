@@ -563,9 +563,27 @@ def build_segments(run: CPRun, *, warn: bool = True) -> tuple[list[CPSegment], l
     return segments, holds, warnings
 
 
-def completed_cp_series(run: CPRun, *, complete_holds: bool = True) -> CPTimeSeries:
-    """Build potential-time-current arrays, optionally inserting hold plateaus."""
-    segments, holds, warnings = build_segments(run, warn=False)
+def completed_cp_series(
+    run: CPRun,
+    *,
+    complete_holds: bool = True,
+    segments: list[CPSegment] | None = None,
+    holds: list[CPHoldRecord] | None = None,
+    warnings: list[str] | None = None,
+) -> CPTimeSeries:
+    """Build potential-time-current arrays, optionally inserting hold plateaus.
+
+    ``segments``/``holds`` are optional read-only inputs from an existing
+    ``CPRunSummary``.  Passing them avoids repeating peak detection and hold
+    splitting on every GUI redraw; omitting them keeps the original path.
+    """
+    if segments is None:
+        segments, holds, build_warnings = build_segments(run, warn=False)
+        warnings = list(build_warnings)
+    else:
+        warnings = list(warnings or [])
+        if holds is None and complete_holds:
+            holds = split_hold_records(run)
     time_s = np.asarray(run.time, dtype=float)
     potential = np.asarray(run.potential, dtype=float)
     if not complete_holds or not holds:

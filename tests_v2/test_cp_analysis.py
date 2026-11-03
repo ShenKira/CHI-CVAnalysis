@@ -52,6 +52,67 @@ def test_cp_hold_completion_and_segments(synthetic_cp_run):
     assert summary.cycles[0].coulombic_efficiency_pct == pytest.approx(100.0, rel=0.05)
 
 
+def test_completed_cp_series_reuses_summary_segments(synthetic_cp_run):
+    run = synthetic_cp_run
+    summary = analyze_cp_run(run, force=True)
+    fresh = completed_cp_series(run, complete_holds=True)
+    reused = completed_cp_series(
+        run,
+        complete_holds=True,
+        segments=summary.segments,
+        holds=summary.holds,
+        warnings=summary.warnings,
+    )
+    assert reused.completed == fresh.completed
+    assert np.array_equal(reused.time_s, fresh.time_s)
+    assert np.array_equal(reused.potential_V, fresh.potential_V)
+    assert np.array_equal(reused.current_A, fresh.current_A)
+    assert np.array_equal(reused.hold_mask, fresh.hold_mask)
+    assert reused.warnings == fresh.warnings
+
+
+def test_cp_gcd_redraw_does_not_rebuild_segments(synthetic_cp_run, monkeypatch):
+    import cvanalysis.analysis.cp as cp_module
+
+    run = synthetic_cp_run
+    analyze_cp_run(run, force=True)
+    calls = []
+    original = cp_module.build_segments
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cp_module, "build_segments", counted)
+    figure = Figure(figsize=(8, 6))
+    draw_gcd_curve(
+        figure,
+        Dataset(cp_runs=[run]),
+        PlotSpec("cp_gcd", [run.run_id]),
+        BUILTIN_PRESETS["daily"],
+    )
+    assert calls == []
+
+
+def test_apply_params_refreshes_cp_summary(synthetic_cp_run):
+    from cvanalysis.services.dataset_service import apply_params
+
+    run = synthetic_cp_run
+    run.params = ElectrodeParams(area_cm2=0.5, mass_mg=1.0)
+    analyze_cp_run(run, force=True)
+    before = run.summary.mean_areal_capacity_mAh_cm2
+    assert np.isfinite(before)
+
+    dataset = Dataset(cp_runs=[run])
+    apply_params(dataset, ElectrodeParams(area_cm2=2.0, mass_mg=1.0), run_ids=[run.run_id])
+    assert run.params.area_cm2 == 2.0
+    assert run.summary.mean_areal_capacity_mAh_cm2 == pytest.approx(before / 4.0)
+    assert run.summary.mean_areal_capacity_mAh_cm2 == pytest.approx(
+        run.summary.mean_discharge_capacity_C / 2.0 / 3.6
+    )
+    assert np.isfinite(run.summary.mean_specific_capacity_mAh_g)
+
+
 def test_cp_metrics_use_electrode_params(synthetic_cp_run):
     run = synthetic_cp_run
     run.params = ElectrodeParams(area_cm2=2.0, mass_mg=1.0)

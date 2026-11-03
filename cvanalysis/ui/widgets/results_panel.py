@@ -131,6 +131,8 @@ class ResultsPanel(QWidget):
         )
         if kind and kind != self._display_kind:
             self.results_tabs.setCurrentIndex({"cv": 0, "eis": 1, "cp": 2}[kind])
+        elif dataset.is_empty:
+            self.results_tabs.setCurrentIndex(0)
         self._display_kind = kind
 
     def _runs_for_display(self, dataset: Dataset, run_type):

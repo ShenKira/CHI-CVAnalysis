@@ -66,15 +66,37 @@ def refresh_analysis(dataset: Dataset, settings: AnalysisSettings | None = None,
     return warnings
 
 
-def apply_params(dataset: Dataset, params: ElectrodeParams, run_ids: Iterable[str] | None = None) -> None:
+def apply_params(
+    dataset: Dataset,
+    params: ElectrodeParams,
+    run_ids: Iterable[str] | None = None,
+    settings: AnalysisSettings | None = None,
+) -> None:
+    settings = settings or AnalysisSettings()
+    selected = set(run_ids) if run_ids is not None else None
     dataset.apply_params(params, run_ids=run_ids)
     for run in dataset.cv_runs:
-        if run.summary is not None:
-            # Recompute summaries (normalized values) without re-segmentation.
-            analyze_cv_run(run, force=False)
+        if run.summary is None or (selected is not None and run.run_id not in selected):
+            continue
+        # Recompute summaries (normalized values) without re-segmentation.
+        analyze_cv_run(
+            run,
+            sensitivity_factor=settings.sensitivity_factor,
+            outlier_count=settings.outlier_count,
+            outlier_z=(
+                settings.outlier_z
+                if settings.outlier_method == "zscore"
+                else None
+            ),
+            segmentation=settings.segmentation,
+            force=False,
+        )
     for run in dataset.cp_runs:
-        if run.summary is not None:
-            analyze_cp_run(run, force=True)
+        if run.summary is None or (selected is not None and run.run_id not in selected):
+            continue
+        # CP capacity normalization is stored in the summary, so it must be
+        # rebuilt even though the parsed raw arrays are unchanged.
+        analyze_cp_run(run, force=True)
 
 
 def fit_eis_runs(

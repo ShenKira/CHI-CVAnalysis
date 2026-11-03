@@ -16,6 +16,7 @@ from cvanalysis.plotting.colors import resolve_color_cycle
 from cvanalysis.plotting.legend import dataset_file_numbers, effective_template, preview_label
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
+from cvanalysis.plotting.texts import axis_text, plot_text
 
 
 _CJK_FONT_CACHE: list[str] | None = None
@@ -89,7 +90,7 @@ def _annotate(
         ha=ha,
         va=va,
         fontsize=size if size is not None else style.annotation_size,
-        fontfamily=style.font_family,
+        fontfamily=style.text_font_family(),
         fontweight="bold" if style.annotation_bold else "normal",
         bbox=dict(boxstyle="round,pad=0.3", facecolor="#fff8e6", edgecolor="#d9c89e", alpha=0.9),
     )
@@ -162,7 +163,12 @@ def _legend_label(
         label = run.legend_name
     current = run.applied_current_A
     if include_current and current is not None:
-        label = f"{label} ({_current_text(current, _current_override(spec))})"
+        label = plot_text(
+            spec,
+            "legend.cp_current_suffix",
+            label=label,
+            current=_current_text(current, _current_override(spec)),
+        )
     return label
 
 
@@ -193,7 +199,13 @@ def draw_gcd_curve(
     handles: list[str] = []
     for index, run in enumerate(runs):
         summary = _summary(run)
-        series = completed_cp_series(run, complete_holds=complete_holds)
+        series = completed_cp_series(
+            run,
+            complete_holds=complete_holds,
+            segments=summary.segments,
+            holds=summary.holds,
+            warnings=summary.warnings,
+        )
         _append_warnings(warnings, series.warnings)
         show_annotation = len(runs) == 1 and style.annotation and spec.annotations
         label = _legend_label(
@@ -217,35 +229,65 @@ def draw_gcd_curve(
         handles.append(label)
         if show_annotation:
             lines = [
-                f"I = {_current_text(run.applied_current_A, _current_override(spec))}",
-                f"{summary.cycle_count} GCD cycles",
+                plot_text(
+                    spec,
+                    "annotation.cp_gcd.current",
+                    current=_current_text(run.applied_current_A, _current_override(spec)),
+                ),
+                plot_text(spec, "annotation.cp_gcd.cycles", n=summary.cycle_count),
             ]
             if np.isfinite(summary.mean_specific_capacity_mAh_g):
-                lines.append(f"Q_dis = {summary.mean_specific_capacity_mAh_g:.4g} mAh/g")
+                lines.append(
+                    plot_text(
+                        spec,
+                        "annotation.cp_gcd.q_specific",
+                        value=summary.mean_specific_capacity_mAh_g,
+                    )
+                )
             elif np.isfinite(summary.mean_discharge_capacity_C):
-                lines.append(f"Q_dis = {summary.mean_discharge_capacity_C:.4g} C")
+                lines.append(
+                    plot_text(
+                        spec,
+                        "annotation.cp_gcd.q",
+                        value=summary.mean_discharge_capacity_C,
+                    )
+                )
             if np.isfinite(summary.mean_coulombic_efficiency_pct):
-                lines.append(f"CE = {summary.mean_coulombic_efficiency_pct:.2f}%")
+                lines.append(
+                    plot_text(
+                        spec,
+                        "annotation.cp_gcd.ce",
+                        value=summary.mean_coulombic_efficiency_pct,
+                    )
+                )
             if np.isfinite(summary.mean_ir_drop_V):
-                lines.append(f"IR drop = {summary.mean_ir_drop_V:.3g} V")
+                lines.append(
+                    plot_text(spec, "annotation.cp_gcd.ir", value=summary.mean_ir_drop_V)
+                )
             if complete_holds and series.completed:
-                lines.append("Holds completed")
+                lines.append(plot_text(spec, "annotation.cp_gcd.holds_completed"))
             _annotate(
                 ax,
                 style,
-                "\n".join(lines),
+                "\n".join(line for line in lines if line),
                 x=0.98,
                 y=0.96,
                 ha="right",
                 va="top",
                 size=max(9.0, style.annotation_size * 0.85),
             )
-    _labels(ax, style, "Time (s)", "Potential (V)")
-    if spec.title and style.show_title:
+    _labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "y"),
+    )
+    title = spec.title or plot_text(spec, "title.cp_gcd")
+    if title and style.show_title:
         ax.set_title(
-            spec.title,
+            title,
             fontsize=style.title_size,
-            fontfamily=style.font_family,
+            fontfamily=style.text_font_family(),
             fontweight="bold" if style.title_bold else "normal",
         )
     if style.legend and spec.show_legend and handles:
@@ -381,6 +423,8 @@ def draw_cp_capacity(
                 )
         x = [cycle.index for cycle in cycles]
         label = run.legend_name
+        discharge_label = plot_text(spec, "legend.cp_discharge", label=label)
+        charge_label = plot_text(spec, "legend.cp_charge", label=label)
         line = ax.plot(
             x,
             discharge,
@@ -389,10 +433,10 @@ def draw_cp_capacity(
             linewidth=style.line_width,
             markersize=style.marker_size,
             markerfacecolor=color,
-            label=f"{label} 放电",
+            label=discharge_label,
         )
         handles.extend(line)
-        labels.append(f"{label} 放电")
+        labels.append(discharge_label)
         if show_charge:
             line = ax.plot(
                 x,
@@ -404,10 +448,10 @@ def draw_cp_capacity(
                 markerfacecolor="white",
                 markeredgecolor=color,
                 alpha=0.8,
-                label=f"{label} 充电",
+                label=charge_label,
             )
             handles.extend(line)
-            labels.append(f"{label} 充电")
+            labels.append(charge_label)
         if ax2 is not None:
             efficiencies = [
                 cycle.coulombic_efficiency_with_holds_pct
@@ -416,6 +460,7 @@ def draw_cp_capacity(
                 for cycle in cycles
             ]
             if any(np.isfinite(value) for value in efficiencies):
+                efficiency_label = plot_text(spec, "legend.cp_efficiency", label=label)
                 line = ax2.plot(
                     x,
                     efficiencies,
@@ -424,23 +469,32 @@ def draw_cp_capacity(
                     linewidth=max(1.0, style.line_width * 0.7),
                     markersize=style.marker_size * 0.8,
                     alpha=0.75,
-                    label=f"{label} CE",
+                    label=efficiency_label,
                 )
                 handles.extend(line)
-                labels.append(f"{label} CE")
+                labels.append(efficiency_label)
 
-    _labels(ax, style, "Cycle", f"Capacity ({unit})")
+    _labels(
+        ax,
+        style,
+        axis_text(spec, "capacity", "x"),
+        axis_text(spec, "capacity", "y", unit=unit),
+    )
     if ax2 is not None:
-        ax2.set_ylabel("Coulombic efficiency (%)", **font_kwargs(style, axis="y"))
+        ax2.set_ylabel(
+            axis_text(spec, "efficiency", "y"),
+            **font_kwargs(style, axis="y"),
+        )
         ax2.set_ylim(0, 110)
         ax2.tick_params(axis="y", labelsize=style.tick_size, colors="#546e7a")
         ax2.yaxis.label.set_color("#546e7a")
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    if spec.title and style.show_title:
+    title = spec.title or plot_text(spec, "title.cp_capacity")
+    if title and style.show_title:
         ax.set_title(
-            spec.title,
+            title,
             fontsize=style.title_size,
-            fontfamily=style.font_family,
+            fontfamily=style.text_font_family(),
             fontweight="bold" if style.title_bold else "normal",
         )
     if style.legend and spec.show_legend and handles:

@@ -21,6 +21,14 @@ from typing import Any
 
 from cvanalysis.plotting.presets import DEFAULT_PRESET_NAME, BUILTIN_PRESETS, preset_names, resolve_preset
 from cvanalysis.plotting.style import DEFAULT_COLOR_CYCLE, PlotStyle
+from cvanalysis.plotting.texts import (
+    DEFAULT_TEXTS,
+    DEFAULT_TEXT_PRESET_LABEL,
+    DEFAULT_TEXT_PRESET_NAME,
+    TEXT_FIELD_MAP,
+    invalid_text_values,
+    resolve_text_values,
+)
 
 
 SCHEMA_VERSION = 2
@@ -30,8 +38,8 @@ SCHEMA_VERSION = 2
 # settings intact.
 BOTTOM_LAYOUT_VERSION = 4
 _KNOWN_KEYS = {
-    "schema_version", "app", "analysis", "eis", "presets", "plotting", "ui",
-    "plot", "colors", "eis_plot", "axis", "grid", "tick",
+    "schema_version", "app", "analysis", "eis", "presets", "text_presets",
+    "plotting", "ui", "plot", "colors", "eis_plot", "axis", "grid", "tick",
 }
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -61,6 +69,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "presets": {
         "active": DEFAULT_PRESET_NAME,
         "user": {},
+    },
+    "text_presets": {
+        "active": DEFAULT_TEXT_PRESET_NAME,
+        "presets": {
+            DEFAULT_TEXT_PRESET_NAME: {
+                "name": DEFAULT_TEXT_PRESET_NAME,
+                "label": DEFAULT_TEXT_PRESET_LABEL,
+                "values": dict(DEFAULT_TEXTS),
+            }
+        },
     },
     "plotting": {
         "default_normalization": "none",
@@ -344,6 +362,8 @@ class SettingsService:
         if self.active_preset not in preset_names(self.user_presets):
             self.active_preset = DEFAULT_PRESET_NAME
         self._sync_legacy_with_style(self.resolve_style())
+        if "text_presets" not in self.raw:
+            self._save_quietly()
 
     def _save_quietly(self) -> None:
         try:
@@ -359,7 +379,10 @@ class SettingsService:
             settings = self.settings
             self.load_warnings.append("配置内容不是对象，已恢复默认值")
 
-        for key in ("app", "analysis", "eis", "presets", "plotting", "ui", "colors"):
+        for key in (
+            "app", "analysis", "eis", "presets", "text_presets", "plotting",
+            "ui", "colors",
+        ):
             if not isinstance(settings.get(key), dict):
                 if key in settings:
                     self.load_warnings.append(f"配置项 {key} 类型无效，已恢复默认值")
@@ -474,6 +497,59 @@ class SettingsService:
             if isinstance(active, str) and active in preset_names(valid_user)
             else DEFAULT_PRESET_NAME
         )
+
+        text_presets = settings["text_presets"]
+        preset_items = text_presets.get("presets")
+        if not isinstance(preset_items, dict):
+            preset_items = {}
+            self.load_warnings.append("文本预设结构无效，已恢复默认文字")
+        valid_text: dict[str, dict] = {}
+        for name, data in preset_items.items():
+            if not isinstance(name, str) or not name or not isinstance(data, dict):
+                self.load_warnings.append(f"忽略无效文本预设: {name!r}")
+                continue
+            values = data.get("values")
+            if not isinstance(values, dict):
+                values = {}
+                self.load_warnings.append(f"文本预设 {name} 的 values 结构无效，已使用默认文字")
+            messages = invalid_text_values(values)
+            clean_values = {
+                str(key): value
+                for key, value in values.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            if name == DEFAULT_TEXT_PRESET_NAME:
+                merged_defaults = dict(DEFAULT_TEXTS)
+                merged_defaults.update(clean_values)
+                clean_values = merged_defaults
+            for message in messages:
+                if message not in self.load_warnings:
+                    self.load_warnings.append(message)
+            label = data.get("label")
+            if not isinstance(label, str) or not label.strip():
+                label = (
+                    DEFAULT_TEXT_PRESET_LABEL
+                    if name == DEFAULT_TEXT_PRESET_NAME
+                    else name
+                )
+            entry = dict(data)
+            entry["name"] = name
+            entry["label"] = label
+            entry["values"] = clean_values
+            valid_text[name] = entry
+        if DEFAULT_TEXT_PRESET_NAME not in valid_text:
+            valid_text[DEFAULT_TEXT_PRESET_NAME] = {
+                "name": DEFAULT_TEXT_PRESET_NAME,
+                "label": DEFAULT_TEXT_PRESET_LABEL,
+                "values": dict(DEFAULT_TEXTS),
+            }
+        text_presets["presets"] = valid_text
+        text_active = text_presets.get("active")
+        text_presets["active"] = (
+            text_active
+            if isinstance(text_active, str) and text_active in valid_text
+            else DEFAULT_TEXT_PRESET_NAME
+        )
         settings["schema_version"] = SCHEMA_VERSION
 
     def _adopt_legacy_drift(self) -> None:
@@ -528,6 +604,12 @@ class SettingsService:
             raw_section = self.raw.get(key)
             if isinstance(raw_section, dict):
                 self.settings[key] = _deep_merge(self.settings.get(key, {}), raw_section)
+        raw_text_presets = self.raw.get("text_presets")
+        if isinstance(raw_text_presets, dict):
+            self.settings["text_presets"] = _deep_merge(
+                self.settings["text_presets"],
+                raw_text_presets,
+            )
         for key, value in self.raw.items():
             if key not in _KNOWN_KEYS:
                 self.settings[key] = copy.deepcopy(value)
@@ -548,6 +630,7 @@ class SettingsService:
         self._sanitize_settings()
         self.settings["schema_version"] = SCHEMA_VERSION
         self.settings["presets"]["active"] = self.active_preset
+        self.settings["text_presets"]["active"] = self.active_text_preset
         self._sync_legacy_with_style(self.resolve_style(), self.color_config)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_name(self.path.name + ".tmp")
@@ -579,6 +662,143 @@ class SettingsService:
             return {}
         user = presets.get("user")
         return user if isinstance(user, dict) else {}
+
+    @property
+    def active_text_preset(self) -> str:
+        section = self.settings.get("text_presets")
+        if not isinstance(section, dict):
+            return DEFAULT_TEXT_PRESET_NAME
+        name = section.get("active", DEFAULT_TEXT_PRESET_NAME)
+        presets = section.get("presets")
+        available = presets if isinstance(presets, dict) else {}
+        if isinstance(name, str) and name in available:
+            return name
+        return DEFAULT_TEXT_PRESET_NAME
+
+    @active_text_preset.setter
+    def active_text_preset(self, name: str) -> None:
+        section = self.settings.setdefault("text_presets", {})
+        if not isinstance(section, dict):
+            section = {}
+            self.settings["text_presets"] = section
+        section["active"] = name
+
+    @property
+    def text_presets(self) -> dict[str, dict]:
+        section = self.settings.get("text_presets")
+        if not isinstance(section, dict):
+            return {}
+        presets = section.get("presets")
+        return presets if isinstance(presets, dict) else {}
+
+    def resolve_text_preset(self, name: str | None = None) -> dict[str, str]:
+        presets = self.text_presets
+        selected = name or self.active_text_preset
+        entry = presets.get(selected)
+        if not isinstance(entry, dict):
+            entry = presets.get(DEFAULT_TEXT_PRESET_NAME)
+        values = entry.get("values") if isinstance(entry, dict) else None
+        return resolve_text_values(values if isinstance(values, dict) else None)
+
+    def set_active_text_preset(self, name: str) -> None:
+        if name not in self.text_presets:
+            name = DEFAULT_TEXT_PRESET_NAME
+        self.active_text_preset = name
+        self.save()
+
+    def save_text_preset(
+        self,
+        name: str,
+        values: dict | None,
+        label: str | None = None,
+    ) -> None:
+        name = str(name).strip()
+        if not name:
+            raise ValueError("文本预设名称不能为空")
+        clean_values = {
+            str(key): value
+            for key, value in (values or {}).items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+        if name == DEFAULT_TEXT_PRESET_NAME:
+            merged = dict(DEFAULT_TEXTS)
+            merged.update(clean_values)
+            clean_values = merged
+        entry = {
+            "name": name,
+            "label": str(label).strip() if isinstance(label, str) and label.strip() else name,
+            "values": clean_values,
+        }
+        section = self.settings.setdefault("text_presets", {})
+        if not isinstance(section, dict):
+            section = {}
+            self.settings["text_presets"] = section
+        presets = section.setdefault("presets", {})
+        if not isinstance(presets, dict):
+            presets = {}
+            section["presets"] = presets
+        presets[name] = entry
+        self.save()
+
+    def delete_text_preset(self, name: str) -> bool:
+        if name == DEFAULT_TEXT_PRESET_NAME:
+            return False
+        presets = self.text_presets
+        if name not in presets:
+            return False
+        del presets[name]
+        if self.active_text_preset == name:
+            self.active_text_preset = DEFAULT_TEXT_PRESET_NAME
+        self.save()
+        return True
+
+    def reset_text_preset(self, name: str) -> bool:
+        if name != DEFAULT_TEXT_PRESET_NAME:
+            return False
+        presets = self.text_presets
+        entry = presets.setdefault(
+            DEFAULT_TEXT_PRESET_NAME,
+            {"name": DEFAULT_TEXT_PRESET_NAME},
+        )
+        entry["name"] = DEFAULT_TEXT_PRESET_NAME
+        entry["label"] = DEFAULT_TEXT_PRESET_LABEL
+        entry["values"] = dict(DEFAULT_TEXTS)
+        self.save()
+        return True
+
+    def export_text_preset(self, name: str, path: str | Path) -> None:
+        presets = self.text_presets
+        entry = presets.get(name)
+        if not isinstance(entry, dict):
+            raise ValueError(f"文本预设不存在: {name}")
+        payload = {
+            "format": "cvanalysis-text-preset",
+            "version": 1,
+            "name": name,
+            "label": entry.get("label", name),
+            "values": resolve_text_values(entry.get("values")),
+        }
+        Path(path).write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def import_text_preset(self, path: str | Path) -> str:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = data.get("preset", data) if isinstance(data, dict) else {}
+        if not isinstance(payload, dict):
+            raise ValueError("文本预设文件格式无效")
+        values = payload.get("values", payload.get("text", {}))
+        if not isinstance(values, dict):
+            raise ValueError("文本预设 values 结构无效")
+        name = str(payload.get("name") or Path(path).stem).strip()
+        if not name:
+            name = Path(path).stem
+        if name == DEFAULT_TEXT_PRESET_NAME:
+            name = f"{DEFAULT_TEXT_PRESET_NAME}-custom"
+        label = payload.get("label") if isinstance(payload.get("label"), str) else name
+        self.save_text_preset(name, values, label)
+        return name
 
     @property
     def color_config(self) -> dict:

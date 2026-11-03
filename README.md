@@ -14,7 +14,7 @@
 - **长文件名处理**：文件名超过显示上限时自动缩短，完整文件名、路径、扫速/窗口等细节显示在左侧详情区。
 - **循环级控制**：数据集树中可勾选文件或单个循环；勾选会即时更新开启“跟随勾选”的图。
 - **每图独立数据选择**：图标签页顶部“数据 (N)...”可选择本图绘制的文件和 CV 循环；修改数据选择后自动停止跟随，勾选“跟随勾选”可恢复即时同步。
-- **图例模板**：可为数据设置默认别名模板（如 `{file_n}-{cycle_n}`），也可在当前图单独覆盖；模板支持文件序号 `{file_n}`、文件内原始循环号 `{cycle_n}`，以及 `{File_Name}`、`{Scan_Rate}`、`{CV_Window}`、`{Cycle_Number}`、`{Low_Freq}` 等字段。
+- **图例模板**：可为数据设置默认别名模板（如 `{file_n}-{cycle_n}`），也可在当前图单独覆盖；模板支持文件序号 `{file_n}`、文件内原始循环号 `{cycle_n}`，以及 `{File_Name}`、`{Scan_Rate}`、`{CV_Window}`、`{Cycle_Number}`、`{Low_Freq}` 等字段。CV 叠加图默认每个数据的循环图例上限为 10；超过时按连续循环范围自动合并（例如 500 个循环显示为 `Cycle 1-50`、`Cycle 51-100`……），可在“分析参数”的“循环图例上限”中调整，设为 0 可恢复逐循环图例。
 - **可拖拽布局与列宽**：数据集、左下角 CV/EIS/CP 结果表、日志和右侧当前图设置之间均可拖动分隔条；数据树、结果表和每图数据对话框的所有列均可拖动，双击列边界或右键表头可自动适配。窗口几何、分隔比例和列宽会被记住。
 - **当前图自定义选项**：分析参数、坐标范围和论文排版固定在主窗口右下方，底栏默认约 400 px 高；左侧结果表、中间日志和右侧设置可拖动调整宽度并记住。切换图时设置跟随切换。电容–扫速支持一次函数、坐标直线、幂律和不拟合；X/Y 轴可分别自动、线性或对数选择，误差棒和拟合线独立开关。
 - **手动坐标范围**：所有图均可分别指定 X/Y 最小值和最大值，留空表示自动。单图显示一个范围栏目；Bode、EIS 拟合等双子图分别显示上下图栏目；CP 容量-循环的左右双 Y 轴也分开设置，右轴只设 Y 范围并与左轴共享 X。范围随项目保存，导出 PNG/PDF/SVG/TIFF 时同样生效。Nyquist 图的手动范围优先于等比例坐标；未设置范围时，仅当 Z'/Z'' 跨度比不超过约 4:1 才强制等比例，避免高频过滤后出现大面积空白。
@@ -59,7 +59,7 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 
 ### 2.1 版本与升级
 
-- 自 v2.0.0 起，`main` 为 v2 工作区；v1 代码存档在 `v1-archive` 分支和 `v1.1` / `v1.2.3` / `v1.3.0` tags。
+- 自 v2.0.0 起，`main` 为 v2 工作区；当前补丁版本 v2.0.1 增加关闭标签页/项目、500-cycle 图例合并和重绘性能修正。
 - 已有 v1 克隆：没有本地修改时执行 `git pull --ff-only`；有修改时先提交到自己的分支或备份，再更新；不确定时直接重新 clone。
 - 旧 GUI 已移除；v1 `config.json` 会自动迁移为 v2 配置。
 
@@ -84,12 +84,14 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
    - 数据级模板作为默认值；单张图可在“数据...”对话框中覆盖，留空则继承默认值。
 5. **快速分析**：右侧“分析与参数”面板顶部选择归一化，CV/EIS/CP 标签提供相应参数和分析按钮，“显示”管理图例、坐标轴和注释。CP 标签可设置“电位-时间自动补全保持区间”和“容量计入恒压保持段”。顶部工具栏的“CV 分析 / EIS 分析 / CP / GCD 分析”为分类下拉菜单。CV/EIS/CP 结果表位于左下角、数据树下方；表格首次按内容适配，之后保留手动列宽。“适配列宽”按钮可重新适配当前结果表，“视图 → 重置布局”可恢复默认布局和列宽。
     - 右下角“当前图”面板的“坐标范围”页可手动设置 X/Y 范围，并在页首切换 EIS 阻抗或 CV/CP 电流单位；范围输入会标注当前单位。多个子图或双 Y 轴会分成独立栏目；留空即自动，对数轴必须输入正数。修改后点击“应用到当前图”，单位切换会自动换算已有范围。
+    - 右键图区选择“当前图设置...”，在“元素与样式”页可用双列紧凑布局调整字号、线宽和显示开关，并为当前图单独填写 X/Y 轴标签。标签留空使用当前文本预设，输入一个或多个空格表示空标签；覆盖随项目保存。
 6. **切换预设**：顶部“预设”下拉框切换日常/IEEE 等风格；“应用到全部”统一所有图。选择非日常预设时会弹出当前图的快速参数窗口（坐标区比例、线宽、X/Y 轴字体、图例/注释/网格等）。
    - “应用”：立即生效，只影响当前图，不写入配置。
    - “保存到配置”：先应用，再选择覆盖当前预设或另存为新预设；覆盖前会提醒。内置预设被覆盖时会创建同名用户覆盖，删除用户覆盖即可恢复内置样式。
 7. **EIS 拟合**：选择 EIS 文件和频率范围，模型选“自动”或指定模型，点击“拟合当前 EIS”。拟合结果、残差和参数显示在新标签页与结果表。
 8. **导出**：每个图标签页可单独导出 PNG/PDF/SVG/TIFF；文件菜单可批量导出分析 CSV。
-9. **保存项目**：`Ctrl+S` 直接保存当前 `.cvproj`；新项目首次保存或使用“项目另存为...”时选择路径（`Ctrl+Shift+S`）。保存数据源路径、电极参数、显示选择、每图数据选择、跟随勾选状态、图例模板、绘图标签和预设。有未保存修改时窗口标题带 `*`，关闭、清空数据或打开其他项目前会提示保存。
+9. **关闭当前标签页 / 项目**：`Ctrl+W` 关闭当前图标签页，只移除该图，不关闭项目；`Ctrl+Shift+W` 关闭当前项目并返回空白工作区，应用不退出、不删除源数据或 `.cvproj`。关闭项目前如有未保存修改会提示保存；后台任务运行中会提示等待，不强制终止线程。
+10. **保存项目**：`Ctrl+S` 直接保存当前 `.cvproj`；新项目首次保存或使用“项目另存为...”时选择路径（`Ctrl+Shift+S`）。保存数据源路径、电极参数、显示选择、每图数据选择、跟随勾选状态、图例模板、绘图标签和预设。有未保存修改时窗口标题带 `*`，关闭项目、清空数据或打开其他项目前会提示保存。
 
 ### 4. 内置绘图预设
 
@@ -102,6 +104,18 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 | 论文/学位论文 | 论文插图 | 6 in 宽、12 pt、细网格、色盲友好配色 |
 
 预设可编辑并保存为用户预设；支持 JSON 导入/导出，便于课题组共享统一样式。旧项目和预设的宽高会保留比例并归一到 3.2 in 高；不再提供手动输入画布宽高。IEEE 单栏/双栏和论文样式默认使用 Arial（Helvetica 缺失时回退 DejaVu Sans），轴标签/刻度/图例使用常规字重，标题只在启用时显示。快捷参数窗口中的“应用”不写配置，“保存到配置”才持久化；覆盖会二次确认。
+
+#### 图内文字与文本预设
+
+- “工具 → 预设管理...”的第二页“文本预设”管理全部图内固定文字：轴标签、默认标题、分析注释、固定图例文字和后缀。
+- 默认文字不再散落在渲染代码中，而是保存在 `config.json` 的 `text_presets`：
+  - `text_presets.active` 指定当前文本预设；
+  - `text_presets.presets.default.values` 是可直接编辑的默认文字；
+  - 用户可新建、编辑、导入、导出和删除自定义文本预设。
+- 切换活动文本预设会应用到所有已打开图；每图通过右键“当前图设置...”填写的 X/Y 轴标签覆盖优先，不会被清空。
+- 文本值留空表示使用内置默认；输入一个或多个空格表示空文字。支持 Unicode 上下标和 Matplotlib mathtext（如 `$v^{-1/2}$`、`$R_{ct}$`），程序会保留 mathtext 花括号。
+- 图内诊断警告和“无数据/请先拟合”等提示不属于文本预设，保持现有中文诊断输出。
+- 文本预设属于应用配置，不写入 `.cvproj`；项目只保存每图轴标签覆盖，文本预设变化在下次打开图或切换活动预设时生效。
 
 ### 5. 算法说明
 
@@ -215,6 +229,7 @@ Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Bu
 ### Version and upgrade
 
 - Starting with v2.0.0, `main` contains the v2 workspace; v1 is archived in the `v1-archive` branch and tags `v1.1`, `v1.2.3`, `v1.3.0`.
+- Current patch release v2.0.1 adds close-tab/close-project workflows, 500-cycle legend merging and redraw performance fixes.
 - Existing v1 clones without local changes can run `git pull --ff-only`; commit or back up local changes first, or simply re-clone.
 - The legacy GUI is removed; v1 `config.json` is migrated automatically.
 
@@ -234,6 +249,7 @@ Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Bu
 - Top/right spine ticks can be disabled independently while keeping the spines visible; hiding a spine also hides its ticks (major and minor).
 - Plot-canvas context menu: detect used colors (line colors plus marker fill/edge, text colors last), edit current-plot colors, canvas aspect ratio, element styles, or fit the image to the tab; copy the current plot as PNG or as an SVG vector image for Word/PowerPoint/Illustrator; contextual controls include bar width and opacity.
 - `.cvproj` projects with `Ctrl+S` quick save and `Ctrl+Shift+S` Save As, PNG/PDF/SVG/TIFF export, CSV summary export.
+- `Ctrl+W` closes the active plot tab without closing the project; `Ctrl+Shift+W` closes the current project and returns to an empty workspace, preserving application layout/settings and prompting for unsaved changes.
 - High-DPI UI with an adjustable 0.8-1.6 interface scale.
 
 ### Compatibility

@@ -193,3 +193,37 @@ def test_bvalue_log_axis_hides_colliding_minor_labels(synthetic_cv_runs):
     minor_labels = [tick.get_text() for tick in figure.axes[0].get_xticklabels(minor=True) if tick.get_visible()]
     assert all(not label for label in minor_labels)
 
+def test_auto_legend_columns_cache_reuses_result(monkeypatch):
+    import cvanalysis.plotting.paper as paper
+
+    layout = {"enabled": True, "fraction": .33, "text_width_mm": 160, "body_pt": 10,
+              "legend_placement": "inside", "legend_columns": "auto"}
+    style = _paper_style(layout)
+    figure = Figure(figsize=style.figure_size, dpi=100)
+    FigureCanvasAgg(figure)
+    ax = figure.add_subplot(111)
+    for index, label in enumerate(("A", "B", "C", "D")):
+        ax.plot([0, 1], [index, index + 1], label=label)
+    handles, labels = ax.get_legend_handles_labels()
+
+    calls = []
+    original = paper._legend_bbox_in_figure
+
+    def counted(fig, legend):
+        calls.append(1)
+        return original(fig, legend)
+
+    monkeypatch.setattr(paper, "_legend_bbox_in_figure", counted)
+    first = paper._choose_columns(figure, handles, labels, style, "auto", axis=ax)
+    first_calls = len(calls)
+    assert first_calls > 0
+
+    second = paper._choose_columns(figure, handles, labels, style, "auto", axis=ax)
+    assert second == first
+    assert len(calls) == first_calls
+
+    changed = paper._choose_columns(
+        figure, handles + [handles[0]], labels + ["E"], style, "auto", axis=ax
+    )
+    assert len(calls) > first_calls
+    assert changed >= 1

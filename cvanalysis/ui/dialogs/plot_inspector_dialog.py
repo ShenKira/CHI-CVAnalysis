@@ -13,8 +13,10 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QTabWidget,
@@ -22,6 +24,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cvanalysis.plotting.axis_limits import axis_display_units, plot_axis_specs
+from cvanalysis.plotting.texts import (
+    axis_label_override,
+    compact_text_enabled,
+    default_axis_text,
+)
 from cvanalysis.ui.widgets.plot_color_panel import PlotColorPanel
 
 
@@ -35,7 +43,7 @@ class PlotInspectorDialog(QDialog):
         self.tab = tab
         self._loading = True
         self.setWindowTitle(f"当前图设置 - {tab.spec.label}")
-        self.resize(620, 720)
+        self.resize(700, 800)
         self._build_ui()
         self._loading = False
 
@@ -89,6 +97,132 @@ class PlotInspectorDialog(QDialog):
         spin.setValue(value)
         return spin
 
+    @staticmethod
+    def _field_pair(left_label: str, left_widget: QWidget, right_label: str, right_widget: QWidget) -> QWidget:
+        pair = QWidget()
+        row = QHBoxLayout(pair)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        for label, widget in ((left_label, left_widget), (right_label, right_widget)):
+            form = QFormLayout()
+            form.setContentsMargins(0, 0, 0, 0)
+            form.setHorizontalSpacing(8)
+            form.setVerticalSpacing(7)
+            form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+            if label:
+                form.addRow(label, widget)
+            else:
+                form.addRow(widget)
+            row.addLayout(form, 1)
+        return pair
+
+    @staticmethod
+    def _checkbox_pair(left: QCheckBox, right: QCheckBox) -> QWidget:
+        pair = QWidget()
+        row = QHBoxLayout(pair)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(16)
+        row.addWidget(left)
+        row.addWidget(right)
+        row.addStretch(1)
+        return pair
+
+    @staticmethod
+    def _sync_axis_label_status(edit: QLineEdit, status: QLabel) -> None:
+        text = edit.text()
+        status.setText("空标签" if text and not text.strip() else "")
+
+    def _axis_default_placeholder(self, spec, side: str, ax, override: str | None) -> str:
+        if override is None and ax is not None:
+            current = ax.get_xlabel() if side == "x" else ax.get_ylabel()
+            return f"默认：{current}" if current else "默认：空标签"
+        unit = None
+        if ax is not None:
+            info = axis_display_units(ax).get(side)
+            if info is not None:
+                unit = info[0]
+        context = {"unit": unit} if unit else {}
+        compact = None
+        if self.tab.spec.kind == "eis_bode":
+            compact = bool(self.tab.spec.paper_layout.get("enabled"))
+        default = default_axis_text(
+            self.tab.spec,
+            spec.key,
+            side,
+            self.tab.text_values,
+            compact=compact,
+            **context,
+        )
+        return f"默认：{default}" if default else "默认：空标签"
+
+    def _build_axis_label_group(self, layout: QVBoxLayout) -> None:
+        tab = self.tab
+        group = QGroupBox("轴标签")
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(9, 24, 9, 9)
+        hint = QLabel(
+            "留空使用当前文本预设；输入一个或多个空格表示空标签。"
+            "每图标签覆盖保存在项目中。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #607d8b;")
+        group_layout.addWidget(hint)
+        self.axis_label_edits: dict[str, dict[str, QLineEdit]] = {}
+        self.axis_label_status: dict[str, dict[str, QLabel]] = {}
+        for spec in plot_axis_specs(tab.spec.kind, tab.figure):
+            section = QGroupBox(spec.label)
+            form = QFormLayout(section)
+            form.setContentsMargins(9, 24, 9, 9)
+            form.setHorizontalSpacing(8)
+            form.setVerticalSpacing(7)
+            ax = tab.figure.axes[spec.index] if spec.index < len(tab.figure.axes) else None
+            edits: dict[str, QLineEdit] = {}
+            statuses: dict[str, QLabel] = {}
+            for side, editable in (("x", spec.editable_x), ("y", spec.editable_y)):
+                if not editable:
+                    continue
+                override = axis_label_override(tab.spec, spec.key, side)
+                edit = QLineEdit()
+                if override is not None:
+                    edit.setText(override)
+                placeholder = self._axis_default_placeholder(spec, side, ax, override)
+                edit.setPlaceholderText(placeholder)
+                edit.setToolTip(
+                    f"{placeholder}\n留空使用默认文字；输入一个或多个空格表示空标签。"
+                )
+                status = QLabel("")
+                status.setMinimumWidth(52)
+                status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                status.setStyleSheet("color: #a33;")
+                row_widget = QWidget()
+                row = QHBoxLayout(row_widget)
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(6)
+                row.addWidget(edit, 1)
+                row.addWidget(status)
+                form.addRow(("X 标签:" if side == "x" else "Y 标签:"), row_widget)
+                edit.textChanged.connect(
+                    lambda _text, target=edit, indicator=status: self._sync_axis_label_status(
+                        target, indicator
+                    )
+                )
+                self._sync_axis_label_status(edit, status)
+                edits[side] = edit
+                statuses[side] = status
+            self.axis_label_edits[spec.key] = edits
+            self.axis_label_status[spec.key] = statuses
+            group_layout.addWidget(section)
+        clear_button = QPushButton("清空本图轴标签覆盖")
+        clear_button.setProperty("secondary", True)
+        clear_button.clicked.connect(self._clear_axis_label_overrides)
+        group_layout.addWidget(clear_button)
+        layout.addWidget(group)
+
+    def _clear_axis_label_overrides(self) -> None:
+        for edits in self.axis_label_edits.values():
+            for edit in edits.values():
+                edit.clear()
+
     def _build_element_controls(self, layout: QVBoxLayout) -> None:
         tab = self.tab
         style = tab.base_style.with_overrides(tab.spec.overrides)
@@ -97,41 +231,39 @@ class PlotInspectorDialog(QDialog):
         display = QGroupBox("显示")
         display_form = QFormLayout(display)
         self.title_edit = QLineEdit(tab.spec.title)
+        self.title_edit.setPlaceholderText("留空使用文本预设中的默认标题")
         display_form.addRow("标题文字:", self.title_edit)
         self.show_title_cb = QCheckBox("显示标题")
         self.show_title_cb.setChecked(style.show_title)
-        display_form.addRow(self.show_title_cb)
         self.show_legend_cb = QCheckBox("显示图例")
         self.show_legend_cb.setChecked(tab.spec.show_legend and style.legend)
-        display_form.addRow(self.show_legend_cb)
+        display_form.addRow(self._checkbox_pair(self.show_title_cb, self.show_legend_cb))
         self.show_axes_cb = QCheckBox("显示坐标轴文字")
         self.show_axes_cb.setChecked(tab.spec.show_axes)
-        display_form.addRow(self.show_axes_cb)
         self.annotations_cb = QCheckBox("显示分析注释")
         self.annotations_cb.setChecked(tab.spec.annotations and style.annotation)
-        display_form.addRow(self.annotations_cb)
+        display_form.addRow(self._checkbox_pair(self.show_axes_cb, self.annotations_cb))
         self.grid_cb = QCheckBox("显示网格")
         self.grid_cb.setChecked(style.grid)
-        display_form.addRow(self.grid_cb)
         self.minor_ticks_cb = QCheckBox("显示次要刻度")
         self.minor_ticks_cb.setChecked(style.minor_ticks)
-        display_form.addRow(self.minor_ticks_cb)
+        display_form.addRow(self._checkbox_pair(self.grid_cb, self.minor_ticks_cb))
         self.spines_cb = QCheckBox("显示上/右边框")
         self.spines_cb.setChecked(style.spines_top and style.spines_right)
         display_form.addRow(self.spines_cb)
         self.ticks_top_cb = QCheckBox("上边框刻度")
         self.ticks_top_cb.setChecked(style.ticks_top)
         self.ticks_top_cb.setToolTip("上边框可见时，是否显示顶部刻度线；不影响刻度文字")
-        display_form.addRow(self.ticks_top_cb)
         self.ticks_right_cb = QCheckBox("右边框刻度")
         self.ticks_right_cb.setChecked(style.ticks_right)
         self.ticks_right_cb.setToolTip("右边框可见时，是否显示右侧刻度线；不影响刻度文字")
-        display_form.addRow(self.ticks_right_cb)
+        display_form.addRow(self._checkbox_pair(self.ticks_top_cb, self.ticks_right_cb))
         self.spines_cb.toggled.connect(self.ticks_top_cb.setEnabled)
         self.spines_cb.toggled.connect(self.ticks_right_cb.setEnabled)
         self.ticks_top_cb.setEnabled(self.spines_cb.isChecked())
         self.ticks_right_cb.setEnabled(self.spines_cb.isChecked())
         layout.addWidget(display)
+        self._build_axis_label_group(layout)
 
         fonts = QGroupBox("字体")
         font_form = QFormLayout(fonts)
@@ -140,32 +272,38 @@ class PlotInspectorDialog(QDialog):
         self.tick_size_spin = self._spin(style.tick_size, 4, 48, 0.5)
         self.legend_size_spin = self._spin(style.legend_size, 4, 48, 0.5)
         self.annotation_size_spin = self._spin(style.annotation_size, 4, 48, 0.5)
-        font_form.addRow("标题字号:", self.title_size_spin)
-        font_form.addRow("轴标签字号:", self.label_size_spin)
-        font_form.addRow("刻度字号:", self.tick_size_spin)
-        font_form.addRow("图例字号:", self.legend_size_spin)
-        font_form.addRow("注释字号:", self.annotation_size_spin)
+        font_form.addRow(self._field_pair(
+            "标题字号:", self.title_size_spin,
+            "轴标签字号:", self.label_size_spin,
+        ))
+        font_form.addRow(self._field_pair(
+            "刻度字号:", self.tick_size_spin,
+            "图例字号:", self.legend_size_spin,
+        ))
         self.title_bold_cb = QCheckBox("标题加粗")
         self.title_bold_cb.setChecked(style.title_bold)
         self.label_bold_cb = QCheckBox("轴标签加粗")
         self.label_bold_cb.setChecked(style.label_bold)
         self.annotation_bold_cb = QCheckBox("注释加粗")
         self.annotation_bold_cb.setChecked(style.annotation_bold)
-        font_form.addRow(self.title_bold_cb)
-        font_form.addRow(self.label_bold_cb)
-        font_form.addRow(self.annotation_bold_cb)
+        font_form.addRow(self._field_pair(
+            "注释字号:", self.annotation_size_spin,
+            "", self.annotation_bold_cb,
+        ))
+        font_form.addRow(self._checkbox_pair(self.title_bold_cb, self.label_bold_cb))
         layout.addWidget(fonts)
 
         lines = QGroupBox("线条与图例")
         line_form = QFormLayout(lines)
         self.line_width_spin = self._spin(style.line_width, 0.2, 10, 0.1)
         self.marker_size_spin = self._spin(style.marker_size, 1, 30, 0.5)
-        line_form.addRow("曲线线宽:", self.line_width_spin)
-        line_form.addRow("点大小:", self.marker_size_spin)
+        line_form.addRow(self._field_pair(
+            "曲线线宽:", self.line_width_spin,
+            "点大小:", self.marker_size_spin,
+        ))
         self.legend_columns_spin = QSpinBox()
         self.legend_columns_spin.setRange(1, 8)
         self.legend_columns_spin.setValue(max(1, int(style.legend_columns)))
-        line_form.addRow("图例列数:", self.legend_columns_spin)
         self.legend_location = QComboBox()
         for label, value in (
             ("自动", "best"),
@@ -182,7 +320,10 @@ class PlotInspectorDialog(QDialog):
             self.legend_location.addItem(label, value)
         index = self.legend_location.findData(style.legend_location)
         self.legend_location.setCurrentIndex(max(0, index))
-        line_form.addRow("图例位置:", self.legend_location)
+        line_form.addRow(self._field_pair(
+            "图例列数:", self.legend_columns_spin,
+            "图例位置:", self.legend_location,
+        ))
         self.legend_frame_cb = QCheckBox("图例边框")
         self.legend_frame_cb.setChecked(style.legend_frame)
         line_form.addRow(self.legend_frame_cb)
@@ -198,8 +339,10 @@ class PlotInspectorDialog(QDialog):
             self.bar_alpha_spin = self._spin(
                 self._option_float(options, "bar_alpha", 1.0), 0.05, 1.0, 0.05
             )
-            graph_form.addRow("柱宽:", self.bar_width_spin)
-            graph_form.addRow("柱透明度:", self.bar_alpha_spin)
+            graph_form.addRow(self._field_pair(
+                "柱宽:", self.bar_width_spin,
+                "柱透明度:", self.bar_alpha_spin,
+            ))
             layout.addWidget(graph)
         elif kind == "cv_contribution":
             graph = QGroupBox("分解图元素")
@@ -256,6 +399,20 @@ class PlotInspectorDialog(QDialog):
             options["fill_alpha"] = self.fill_alpha_spin.value()
         if hasattr(self, "line_alpha_spin"):
             options["line_alpha"] = self.line_alpha_spin.value()
+        axis_labels: dict[str, dict[str, str]] = {}
+        for section, edits in getattr(self, "axis_label_edits", {}).items():
+            entry: dict[str, str] = {}
+            for side, edit in edits.items():
+                text = edit.text()
+                if text == "":
+                    continue
+                entry[side] = " " if text.strip() == "" else text
+            if entry:
+                axis_labels[section] = entry
+        if axis_labels:
+            options["axis_labels"] = axis_labels
+        else:
+            options.pop("axis_labels", None)
         tab.spec.analysis_options = options
         tab.spec.title = self.title_edit.text().strip()
         tab.spec.show_legend = self.show_legend_cb.isChecked()

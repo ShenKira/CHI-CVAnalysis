@@ -45,7 +45,12 @@ from cvanalysis.domain.units import CURRENT, format_with_unit
 from cvanalysis.plotting.legend import dataset_file_numbers, preview_label
 from cvanalysis.plotting.presets import BUILTIN_PRESETS, DEFAULT_PRESET_NAME, preset_label, preset_names
 from cvanalysis.plotting.spec import PLOT_KINDS, PlotSpec
-from cvanalysis.services.dataset_service import AnalysisSettings, fit_eis_runs, refresh_analysis
+from cvanalysis.services.dataset_service import (
+    AnalysisSettings,
+    apply_params,
+    fit_eis_runs,
+    refresh_analysis,
+)
 from cvanalysis.services.export_service import export_analysis_csv
 from cvanalysis.services.project_service import load_project, save_project as save_project_file
 from cvanalysis.services.settings_service import (
@@ -91,6 +96,7 @@ class MainWindow(QMainWindow):
         self._project_analysis = None
         self._dirty = False
         self._loading_project = False
+        self._resetting_project = False
         self._ui_scale = _safe_ui_scale(self.settings_service.ui_state.get("scale", 1.0))
         self.dataset = Dataset()
         self.dataset_model = DatasetTreeModel(self)
@@ -102,7 +108,8 @@ class MainWindow(QMainWindow):
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setSingleShot(True)
         self._redraw_timer.setInterval(80)
-        self._redraw_timer.timeout.connect(self._redraw_all_tabs)
+        self._pending_redraw_tabs: list[PlotTab] = []
+        self._redraw_timer.timeout.connect(self._flush_pending_tabs)
 
         self._apply_ui_scale()
         install_wheel_guard(QApplication.instance())
@@ -127,6 +134,8 @@ class MainWindow(QMainWindow):
                 "frequency_high": None,
             }
         )
+        self._update_tab_actions()
+        self._update_project_actions()
         self.statusBar().showMessage("就绪")
 
     # ------------------------------------------------------------------
@@ -302,6 +311,14 @@ class MainWindow(QMainWindow):
         self.save_project_as_action.setShortcut(QKeySequence.SaveAs)
         self.save_project_as_action.setToolTip("将当前项目保存到新文件（Ctrl+Shift+S）")
         self.save_project_as_action.triggered.connect(self.save_project_as)
+        self.close_project_action = QAction("关闭当前项目", self)
+        self.close_project_action.setShortcut(QKeySequence("Ctrl+Shift+W"))
+        self.close_project_action.setShortcutContext(Qt.WindowShortcut)
+        self.close_project_action.setToolTip(
+            "关闭当前项目并返回空白工作区；有可保存的未保存修改时会提示保存（Ctrl+Shift+W）"
+        )
+        self.close_project_action.setEnabled(False)
+        self.close_project_action.triggered.connect(self.close_project)
         self.export_action = QAction("导出当前图...", self)
         self.export_action.setShortcut(QKeySequence("Ctrl+E"))
         self.export_action.triggered.connect(self.export_current_plot)
@@ -347,8 +364,15 @@ class MainWindow(QMainWindow):
         self.cp_gcd_action.triggered.connect(lambda: self._request_plot("cp_gcd"))
         self.cp_capacity_action = QAction("GCD 容量-循环 + 库伦效率", self)
         self.cp_capacity_action.triggered.connect(lambda: self._request_plot("cp_capacity"))
+        self.close_tab_action = QAction("关闭当前标签页", self)
+        self.close_tab_action.setShortcut(QKeySequence("Ctrl+W"))
+        self.close_tab_action.setShortcutContext(Qt.WindowShortcut)
+        self.close_tab_action.setToolTip("关闭当前图标签页，不关闭当前项目（Ctrl+W）")
+        self.close_tab_action.setEnabled(False)
+        self.close_tab_action.triggered.connect(self._close_current_tab)
         self.close_plots_action = QAction("关闭所有图", self)
         self.close_plots_action.triggered.connect(self.close_all_plots)
+        self.close_plots_action.setEnabled(False)
         self.reset_layout_action = QAction("重置布局", self)
         self.reset_layout_action.triggered.connect(self.reset_layout)
 
@@ -376,6 +400,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.open_project_action)
         file_menu.addAction(self.save_project_action)
         file_menu.addAction(self.save_project_as_action)
+        file_menu.addAction(self.close_project_action)
         file_menu.addSeparator()
         file_menu.addAction(self.export_action)
         file_menu.addAction(self.export_csv_action)
@@ -393,6 +418,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.analysis_dock.toggleViewAction())
         view_menu.addAction(self.log_dock.toggleViewAction())
         view_menu.addSeparator()
+        view_menu.addAction(self.close_tab_action)
         view_menu.addAction(self.close_plots_action)
         view_menu.addAction(self.reset_layout_action)
 
@@ -902,22 +928,21 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
         params = ElectrodeParams(area.value() or None, mass.value() or None)
-        for run_id in run_ids:
-            run = self.dataset.find_run(run_id)
-            if run is not None:
-                run.params = params.copy()
-        # Normalized summaries depend on these parameters.
-        refresh_analysis(
-            self.dataset,
-            AnalysisSettings(
-                outlier_count=int(self.active_analysis.get("outlier_count", 1)),
-                sensitivity_factor=float(self.active_analysis.get("sensitivity_factor", 10.0)),
-                segmentation=str(self.active_analysis.get("segmentation", "robust")),
-                outlier_method=str(self.active_analysis.get("outlier_method", "trim")),
-                outlier_z=float(self.active_analysis.get("outlier_z", 3.0)),
-            ),
+        # Only selected runs need their normalized summaries refreshed.  EIS
+        # metrics do not depend on area/mass and must not be recomputed here.
+        analysis_settings = AnalysisSettings(
+            outlier_count=int(self.active_analysis.get("outlier_count", 1)),
+            sensitivity_factor=float(self.active_analysis.get("sensitivity_factor", 10.0)),
+            segmentation=str(self.active_analysis.get("segmentation", "robust")),
+            outlier_method=str(self.active_analysis.get("outlier_method", "trim")),
+            outlier_z=float(self.active_analysis.get("outlier_z", 3.0)),
         )
-        self.metrics = {run.run_id: run.summary for run in self.dataset.eis_runs if run.summary is not None}
+        apply_params(
+            self.dataset,
+            params,
+            run_ids=run_ids,
+            settings=analysis_settings,
+        )
         self._refresh_model_and_panel()
         self._redraw_all_tabs()
         self._mark_dirty()
@@ -1146,6 +1171,7 @@ class MainWindow(QMainWindow):
             metrics=self.metrics,
             color_config=self.settings_service.color_config,
             user_presets=self.settings_service.user_presets,
+            text_values=self.settings_service.resolve_text_preset(),
         )
         tab.message.connect(self.statusBar().showMessage)
         tab.rendered.connect(self._on_plot_rendered)
@@ -1157,6 +1183,7 @@ class MainWindow(QMainWindow):
         index = self.tabs.addTab(tab, spec.label)
         self.tabs.setTabToolTip(index, spec.label)
         self.tabs.setCurrentIndex(index)
+        self._update_tab_actions()
         self._update_plot_contexts()
         self._refresh_preset_combo()
         self._mark_dirty()
@@ -1174,17 +1201,38 @@ class MainWindow(QMainWindow):
         widget = self.tabs.widget(index)
         self.tabs.removeTab(index)
         self.options_panel.bind(self._active_plot_tab())
+        if isinstance(widget, PlotTab) and widget in self._pending_redraw_tabs:
+            self._pending_redraw_tabs.remove(widget)
         if widget is not None:
             widget.deleteLater()
             self._mark_dirty()
+        self._update_tab_actions()
+
+    def _close_current_tab(self) -> None:
+        tab = self._active_plot_tab()
+        if tab is None:
+            return
+        index = self.tabs.indexOf(tab)
+        if index >= 0:
+            self._close_tab(index)
 
     def _close_all_tabs_silent(self) -> None:
         self.options_panel.bind(None)
-        while self.tabs.count():
-            widget = self.tabs.widget(0)
-            self.tabs.removeTab(0)
-            if widget is not None:
-                widget.deleteLater()
+        self._pending_redraw_tabs.clear()
+        previous = self.tabs.blockSignals(True)
+        try:
+            while self.tabs.count():
+                widget = self.tabs.widget(0)
+                self.tabs.removeTab(0)
+                if widget is not None:
+                    widget.deleteLater()
+        finally:
+            self.tabs.blockSignals(previous)
+        self._update_tab_actions()
+
+    def _update_tab_actions(self) -> None:
+        self.close_tab_action.setEnabled(self._active_plot_tab() is not None)
+        self.close_plots_action.setEnabled(self.tabs.count() > 0)
 
     def close_all_plots(self) -> None:
         had_tabs = self.tabs.count() > 0
@@ -1194,6 +1242,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index: int) -> None:
         self.options_panel.bind(self._active_plot_tab())
+        self._update_tab_actions()
         tab = self.tabs.widget(index)
         if not isinstance(tab, PlotTab):
             self._refresh_preset_combo()
@@ -1215,31 +1264,63 @@ class MainWindow(QMainWindow):
                 "include_holds": tab.spec.analysis_options.get("include_holds", False),
             }
         )
+        if tab.dirty:
+            self._redraw_tab(tab)
 
-    def _redraw_all_tabs(self) -> None:
+    def _apply_plot_context(self, tab: PlotTab) -> None:
+        tab.update_context(
+            self.dataset,
+            fits=self.fits,
+            metrics=self.metrics,
+            color_config=self.settings_service.color_config,
+            user_presets=self.settings_service.user_presets,
+            text_values=self.settings_service.resolve_text_preset(),
+        )
+
+    def _tab_is_open(self, tab: PlotTab) -> bool:
+        return any(self.tabs.widget(index) is tab for index in range(self.tabs.count()))
+
+    def _mark_tab_dirty(self, tab: PlotTab) -> None:
+        tab.mark_dirty()
+        if tab not in self._pending_redraw_tabs:
+            self._pending_redraw_tabs.append(tab)
+
+    def _mark_all_tabs_dirty(self) -> None:
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             if isinstance(tab, PlotTab):
-                tab.update_context(
-                    self.dataset,
-                    fits=self.fits,
-                    metrics=self.metrics,
-                    color_config=self.settings_service.color_config,
-                    user_presets=self.settings_service.user_presets,
-                )
-                tab.redraw()
+                self._mark_tab_dirty(tab)
+
+    def _redraw_tab(self, tab: PlotTab) -> None:
+        if not self._tab_is_open(tab):
+            if tab in self._pending_redraw_tabs:
+                self._pending_redraw_tabs.remove(tab)
+            return
+        self._apply_plot_context(tab)
+        tab.redraw()
+        if tab in self._pending_redraw_tabs:
+            self._pending_redraw_tabs.remove(tab)
+
+    def _flush_pending_tabs(self) -> None:
+        """Draw only the visible tab; hidden dirty tabs wait for activation."""
+        current = self._active_plot_tab()
+        for tab in list(self._pending_redraw_tabs):
+            if not self._tab_is_open(tab):
+                self._pending_redraw_tabs.remove(tab)
+                continue
+            if tab is current:
+                self._redraw_tab(tab)
+
+    def _redraw_all_tabs(self) -> None:
+        """Mark every tab stale and immediately draw the visible one."""
+        self._mark_all_tabs_dirty()
+        self._flush_pending_tabs()
 
     def _update_plot_contexts(self) -> None:
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             if isinstance(tab, PlotTab):
-                tab.update_context(
-                    self.dataset,
-                    fits=self.fits,
-                    metrics=self.metrics,
-                    color_config=self.settings_service.color_config,
-                    user_presets=self.settings_service.user_presets,
-                )
+                self._apply_plot_context(tab)
 
     def _prune_tab_specs(self) -> None:
         """Drop removed runs from existing plot tabs without changing selection."""
@@ -1284,6 +1365,7 @@ class MainWindow(QMainWindow):
             )
         if tab.spec.kind.startswith("eis_") and self.fits:
             tab.spec.fit_enabled = True
+        self._mark_tab_dirty(tab)
         self._mark_dirty()
         self._redraw_timer.start()
 
@@ -1551,7 +1633,16 @@ class MainWindow(QMainWindow):
             resolved = self.settings_service.resolve_style(tab.spec.preset)
             if tab.base_style.to_dict() != resolved.to_dict():
                 tab.set_style(resolved, clear_overrides=False)
+        self._apply_text_preset_to_all()
         self._update_plot_contexts()
+
+    def _apply_text_preset_to_all(self) -> None:
+        values = self.settings_service.resolve_text_preset()
+        for index in range(self.tabs.count()):
+            tab = self.tabs.widget(index)
+            if isinstance(tab, PlotTab):
+                tab.set_text_values(values, redraw=False)
+        self._redraw_all_tabs()
 
     # ------------------------------------------------------------------
     # Settings / project / export
@@ -1679,6 +1770,49 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             self.logger.exception("保存最近目录失败")
 
+    def close_project(self) -> bool:
+        """Close the current project and return to an empty workspace."""
+        if not self._project_has_content():
+            return True
+        if self._background_busy():
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请等待当前后台任务结束后再关闭项目",
+            )
+            return False
+        if not self._confirm_discard_changes("关闭当前项目"):
+            return False
+        self._reset_project_state()
+        return True
+
+    def _reset_project_state(self) -> None:
+        """Reset project-scoped state while preserving application settings."""
+        self._resetting_project = True
+        try:
+            self._redraw_timer.stop()
+            self._pending_redraw_tabs.clear()
+            self._close_all_tabs_silent()
+            self.dataset = Dataset()
+            self.fits = {}
+            self.metrics = {}
+            self._project_analysis = None
+            self.dataset_model.set_dataset(self.dataset, {}, {})
+            defaults = {
+                "normalization": self.active_analysis.get("default_normalization", "none"),
+                "fit_model": self.settings_service.eis.get("fit_model", "auto"),
+            }
+            self.analysis_panel.reset_for_empty(defaults)
+            self.results_panel.update_dataset(self.dataset)
+            self._update_file_details([])
+            self._refresh_preset_combo()
+        finally:
+            self._resetting_project = False
+        self._mark_clean()
+        self._update_tab_actions()
+        self._update_project_actions()
+        self.statusBar().showMessage("项目已关闭")
+
     def open_project(self) -> None:
         if self._background_busy():
             QMessageBox.information(self, "任务进行中", "请等待当前后台任务结束后再打开其他项目")
@@ -1780,7 +1914,7 @@ class MainWindow(QMainWindow):
     # Misc
     # ------------------------------------------------------------------
     def _mark_dirty(self) -> None:
-        if self._loading_project or self._dirty:
+        if self._loading_project or self._resetting_project or self._dirty:
             return
         self._dirty = True
         self._update_window_title()
@@ -1788,6 +1922,17 @@ class MainWindow(QMainWindow):
     def _mark_clean(self) -> None:
         self._dirty = False
         self._update_window_title()
+
+    def _project_has_content(self) -> bool:
+        return (
+            self.dataset.path is not None
+            or not self.dataset.is_empty
+            or self._dirty
+        )
+
+    def _update_project_actions(self) -> None:
+        if hasattr(self, "close_project_action"):
+            self.close_project_action.setEnabled(self._project_has_content())
 
     def _update_window_title(self) -> None:
         marker = "*" if self._dirty else ""
@@ -1797,9 +1942,10 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"{BASE_WINDOW_TITLE} *")
         else:
             self.setWindowTitle(BASE_WINDOW_TITLE)
+        self._update_project_actions()
 
     def _confirm_discard_changes(self, action: str) -> bool:
-        if not self._dirty:
+        if not self._dirty or self.dataset.is_empty:
             return True
         if os.environ.get("CVANALYSIS_DISABLE_SAVE_PROMPTS") == "1":
             return True

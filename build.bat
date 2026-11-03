@@ -6,11 +6,11 @@ REM ---------------------------------------------------------------------------
 REM CVAnalysis v2 build script
 REM
 REM Usage:
-REM   build.bat                    -> build StandAlone + OneFile for 2.0.0
+REM   build.bat                    -> build StandAlone + OneFile for 2.0.1
 REM   build.bat 2.0.1              -> build another version
-REM   build.bat 2.0.0 all          -> build StandAlone + OneFile
-REM   build.bat 2.0.0 standalone   -> build StandAlone only
-REM   build.bat 2.0.0 onefile      -> build OneFile only
+REM   build.bat 2.0.1 all          -> build StandAlone + OneFile
+REM   build.bat 2.0.1 standalone   -> build StandAlone only
+REM   build.bat 2.0.1 onefile      -> build OneFile only
 REM
 REM Optional:
 REM   set CVANALYSIS_PYTHON=C:\path\to\env\python.exe
@@ -23,7 +23,7 @@ REM ---------------------------------------------------------------------------
 cd /d "%~dp0"
 
 set "APP_VERSION=%~1"
-if "%APP_VERSION%"=="" set "APP_VERSION=2.0.0"
+if "%APP_VERSION%"=="" set "APP_VERSION=2.0.1"
 set "APP_VERSION=%APP_VERSION: =%"
 if /i "%APP_VERSION:~0,1%"=="v" set "APP_VERSION=%APP_VERSION:~1%"
 

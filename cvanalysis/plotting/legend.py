@@ -47,6 +47,62 @@ LEGEND_TOKENS: tuple[LegendToken, ...] = (
 _TOKEN_LOOKUP = {token.token.lower(): token for token in LEGEND_TOKENS}
 _TOKEN_PATTERN = re.compile(r"\{([^{}]+)\}")
 
+DEFAULT_CYCLE_LEGEND_LIMIT = 10
+
+
+@dataclass(frozen=True)
+class CycleLegendGroup:
+    """A contiguous group of CV cycles represented by one legend entry."""
+
+    cycles: tuple
+    start: int
+    end: int
+
+
+def cycle_legend_limit(spec) -> int:
+    """Return the active per-run cycle legend limit.
+
+    ``0`` disables merging, which is useful for users who explicitly want one
+    legend entry per cycle.  Invalid values fall back to the safe default.
+    """
+    options = getattr(spec, "analysis_options", None) or {}
+    raw = options.get("legend_cycle_limit", DEFAULT_CYCLE_LEGEND_LIMIT)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_CYCLE_LEGEND_LIMIT
+    return max(0, value)
+
+
+def cycle_legend_groups(
+    cycles,
+    limit: int,
+    *,
+    renumber: bool = False,
+) -> list[CycleLegendGroup] | None:
+    """Split selected cycles into at most ``limit`` balanced legend groups.
+
+    Returns ``None`` when no grouping is needed, so callers can keep the
+    original per-cycle path unchanged.  Labels use the displayed sequence
+    number when ``renumber`` is true, otherwise the original cycle index.
+    """
+    ordered = list(cycles)
+    if limit <= 0 or len(ordered) <= limit:
+        return None
+    base, extra = divmod(len(ordered), limit)
+    groups: list[CycleLegendGroup] = []
+    start = 0
+    for group_index in range(limit):
+        size = base + (1 if group_index < extra else 0)
+        if size <= 0:
+            continue
+        chunk = tuple(ordered[start : start + size])
+        first = start + 1 if renumber else int(chunk[0].index)
+        last = start + size if renumber else int(chunk[-1].index)
+        groups.append(CycleLegendGroup(chunk, first, last))
+        start += size
+    return groups
+
 
 def legend_tokens(kind: str | None = None) -> list[LegendToken]:
     if kind is None:

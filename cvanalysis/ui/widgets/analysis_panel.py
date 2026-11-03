@@ -282,6 +282,44 @@ class AnalysisPanel(QWidget):
         return True
 
     # -- dataset / options ------------------------------------------------
+    def reset_for_empty(self, defaults: dict | None = None) -> None:
+        """Restore the panel to its no-project state.
+
+        ``update_dataset(Dataset())`` only updates ranges and the info label;
+        it deliberately leaves user controls untouched.  Closing a project
+        needs a stronger reset so the next project cannot inherit target
+        voltage, scan rate, fit model or display flags from the previous one.
+        """
+        self._loading = True
+        try:
+            self._current_dataset = Dataset()
+            self._selected_run_ids = []
+            self._visible_run_ids = None
+            self._display_kind = None
+            self.info_label.setText("尚未导入数据")
+            self.normalization_combo.setCurrentIndex(0)
+            self.target_spin.setRange(-1000.0, 1000.0)
+            self.target_spin.setValue(0.0)
+            self.scan_rate_spin.setRange(1e-9, 1e9)
+            self.scan_rate_spin.setValue(self.scan_rate_spin.minimum())
+            self.freq_low_edit.clear()
+            self.freq_low_edit.setPlaceholderText("低频，如 0.01")
+            self.freq_high_edit.clear()
+            self.freq_high_edit.setPlaceholderText("高频，如 1e6")
+            self.frequency_error.clear()
+            self.fit_model_combo.setCurrentIndex(0)
+            self.renumber_cycles_cb.setChecked(False)
+            self.show_legend_cb.setChecked(True)
+            self.show_axes_cb.setChecked(True)
+            self.show_annotations_cb.setChecked(True)
+            self.complete_holds_cb.setChecked(True)
+            self.include_holds_cb.setChecked(False)
+            self.analysis_tabs.setCurrentIndex(0)
+        finally:
+            self._loading = False
+        if defaults:
+            self.set_options(defaults)
+
     def update_dataset(
         self,
         dataset: Dataset,

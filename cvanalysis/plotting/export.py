@@ -18,6 +18,7 @@ from cvanalysis.plotting.colors import apply_color_overrides
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure
 from cvanalysis.plotting.paper import finish_paper, paper_overrides
+from cvanalysis.plotting.texts import plot_text_context
 from cvanalysis.plotting.ticks import apply_log_tick_formats, apply_unified_ticks
 
 
@@ -41,6 +42,7 @@ def render_plot(
     color_config: dict | None = None,
     fits: dict[str, EISFitResult] | None = None,
     metrics: dict[str, EISMetrics] | None = None,
+    text_values: dict | None = None,
 ) -> list[str]:
     """Draw a plot into an existing figure and return warnings."""
     color_overrides = spec.analysis_options.get("color_overrides")
@@ -61,37 +63,38 @@ def render_plot(
 
     figure._defer_final_layout = True
     try:
-        with mpl.rc_context(style.rc()):
-            if spec.kind.startswith("cv_"):
-                warnings = cv_renderer.draw(
-                    figure,
-                    dataset,
-                    spec,
-                    style,
-                    color_config=color_config,
-                    fits=fits,
-                    metrics=metrics,
-                )
-            elif spec.kind.startswith("eis_"):
-                warnings = eis_renderer.draw(
-                    figure,
-                    dataset,
-                    spec,
-                    style,
-                    color_config=color_config,
-                    fits=fits,
-                    metrics=metrics,
-                )
-            else:
-                warnings = cp_renderer.draw(
-                    figure,
-                    dataset,
-                    spec,
-                    style,
-                    color_config=color_config,
-                    fits=fits,
-                    metrics=metrics,
-                )
+        with plot_text_context(spec, text_values):
+            with mpl.rc_context(style.rc()):
+                if spec.kind.startswith("cv_"):
+                    warnings = cv_renderer.draw(
+                        figure,
+                        dataset,
+                        spec,
+                        style,
+                        color_config=color_config,
+                        fits=fits,
+                        metrics=metrics,
+                    )
+                elif spec.kind.startswith("eis_"):
+                    warnings = eis_renderer.draw(
+                        figure,
+                        dataset,
+                        spec,
+                        style,
+                        color_config=color_config,
+                        fits=fits,
+                        metrics=metrics,
+                    )
+                else:
+                    warnings = cp_renderer.draw(
+                        figure,
+                        dataset,
+                        spec,
+                        style,
+                        color_config=color_config,
+                        fits=fits,
+                        metrics=metrics,
+                    )
     finally:
         figure._defer_final_layout = False
 
@@ -111,6 +114,7 @@ def render_to_new_figure(
     color_config: dict | None = None,
     fits: dict[str, EISFitResult] | None = None,
     metrics: dict[str, EISMetrics] | None = None,
+    text_values: dict | None = None,
 ) -> Figure:
     """Render a fresh figure with the preset's print size (for export)."""
     style = style.with_overrides(paper_overrides(spec.paper_layout, style))
@@ -124,6 +128,7 @@ def render_to_new_figure(
         color_config=color_config,
         fits=fits,
         metrics=metrics,
+        text_values=text_values,
     )
     return figure
 
@@ -136,6 +141,7 @@ def render_svg_bytes(
     color_config: dict | None = None,
     fits: dict[str, EISFitResult] | None = None,
     metrics: dict[str, EISMetrics] | None = None,
+    text_values: dict | None = None,
 ) -> bytes:
     """Render a plot as SVG bytes for vector clipboard/export workflows."""
     figure = render_to_new_figure(
@@ -145,6 +151,7 @@ def render_svg_bytes(
         color_config=color_config,
         fits=fits,
         metrics=metrics,
+        text_values=text_values,
     )
     buffer = BytesIO()
     figure.savefig(buffer, format="svg", facecolor=figure.get_facecolor())

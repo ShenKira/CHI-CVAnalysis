@@ -4,6 +4,8 @@
 >
 > 当前基线：2026-10-25。`tests_v2` 144 项通过，1 条既有多 CV tight-layout 警告。当前代码已包含 CV/EIS/CP 分析、CP/GCD、手动坐标范围、分类快捷菜单等功能。
 >
+> **2026-10-31 进展情况**：按实际规模（500-cycle CV 约 10 万点；1h CP 2 万–30 万点）执行了 P0-lite，而没有启动完整 P0/P1。已实现：当前图选项只重绘当前 tab、隐藏 dirty tab 延迟补绘、论文自动图例列数缓存、CV 循环图例上限与范围合并（默认 10）、CP `completed_cp_series` 复用 summary segments、参数修改按 run 范围刷新并修复 CP 归一化 summary 失效。完整 `AnalysisCache`、四级刷新、通用重绘依赖图、异步保存仍未实现，当前规模下不建议启动。
+>
 > 开始修改前请先读：
 > - 本地交接说明 `Vibe_Coding_Outline.md`（不纳入仓库）
 > - 内部实现日志 `docs/IMPLEMENTATION_LOG.md`（不纳入仓库）

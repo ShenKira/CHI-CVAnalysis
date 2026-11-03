@@ -1,9 +1,23 @@
 # CVAnalysis v2 Build 交接说明
 
-> 状态（2026-10-28）：v2.0.0 的 **StandAlone** 与 **OneFile** 均已构建成功并通过启动验证。
+> 状态（2026-11-03）：v2.0.1 的 **StandAlone** 与 **OneFile** 均已构建成功并通过启动验证。
 > 本文记录已验证环境、关键根因、构建命令和验证方法，供下一位接手构建/发布的 Agent 或开发者使用。
 
 ## 1. 已验证产物
+
+### v2.0.1
+
+| 产物 | 路径 | 大小 | SHA256 |
+| --- | --- | ---: | --- |
+| StandAlone | `CVAnalysis_StandAlone_v2.0.1\start_gui.dist\CVAnalysis_v2.0.1.exe` | 126,563,328 | `05594C05C8586CB6DB43A8097394646379F340301A14C6DCF7D206C401D32C60` |
+| OneFile | `CVAnalysis_OneFile_v2.0.1\CVAnalysis_v2.0.1.exe` | 336,285,696 | `38939BECFC7F366A13FB3E812107F459038CC37F1645FFF70DF131A2272AB49F` |
+
+- 文件版本资源：`2.0.1.0`（StandAlone / OneFile 均验证）。
+- 离屏 StandAlone 启动到 `WaitForInputIdle`：约 4.96 s。
+- 带窗口 OneFile 冷启动到 `WaitForInputIdle`：约 28.09 s（首次解压 336 MB）。
+- 构建日志：`build_cache\logs\build_v2.0.1_20261103.log`（本地忽略，不提交）。
+
+### v2.0.0（历史）
 
 | 产物 | 路径 | 大小 | SHA256 |
 | --- | --- | ---: | --- |
@@ -30,8 +44,10 @@
 源码测试基线（`nuitka_pack` 环境）：
 
 ```text
-202 passed, 2 warnings
+250 passed, 2 warnings
 ```
+
+两条警告仍是既有的 Matplotlib tight-layout 警告；pytest 进程退出码 1 是已记录的 teardown 问题，无测试失败摘要。
 
 两条警告仍是既有的 Matplotlib tight-layout 警告。
 
@@ -136,10 +152,10 @@ Add-MpPreference -ExclusionProcess "cl.exe"
 - 用法：
 
 ```bat
-build.bat                  :: 默认 2.0.0，构建 StandAlone + OneFile
-build.bat 2.0.0 all
-build.bat 2.0.0 standalone
-build.bat 2.0.0 onefile
+build.bat                  :: 默认 2.0.1，构建 StandAlone + OneFile
+build.bat 2.0.1 all
+build.bat 2.0.1 standalone
+build.bat 2.0.1 onefile
 ```
 
 - 优先使用 `nuitka_pack` 环境，可用 `CVANALYSIS_PYTHON` 覆盖 Python 路径。
@@ -159,25 +175,25 @@ build.bat 2.0.0 onefile
 
 ```powershell
 # 常规构建（缓存已热）
-cmd /c build.bat 2.0.0 standalone
-cmd /c build.bat 2.0.0 onefile
-cmd /c build.bat 2.0.0 all
+cmd /c build.bat 2.0.1 standalone
+cmd /c build.bat 2.0.1 onefile
+cmd /c build.bat 2.0.1 all
 
 # 首次在 PATH / Nuitka / Python 变化后构建
 $env:CVANALYSIS_FORCE_DLL_CACHE = '1'
-cmd /c build.bat 2.0.0 all
+cmd /c build.bat 2.0.1 all
 Remove-Item Env:CVANALYSIS_FORCE_DLL_CACHE
 ```
 
 建议把构建输出重定向到 `build_cache\logs\`，便于排查 Defender / DLL 问题：
 
 ```powershell
-cmd /c build.bat 2.0.0 all *> "build_cache\logs\build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+cmd /c build.bat 2.0.1 all *> "build_cache\logs\build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 ```
 
 ## 6. 验证清单
 
-1. exe 存在，版本资源为 `2.0.0.0`，记录大小和 SHA256。
+1. exe 存在，版本资源为 `2.0.1.0`，记录大小和 SHA256。
 2. StandAlone 关键文件存在：
    - `ffi.dll`
    - `libexpat.dll`
@@ -188,7 +204,7 @@ cmd /c build.bat 2.0.0 all *> "build_cache\logs\build_$(Get-Date -Format 'yyyyMM
 
 ```powershell
 $env:QT_QPA_PLATFORM = 'offscreen'
-Start-Process -FilePath "CVAnalysis_StandAlone_v2.0.0\start_gui.dist\CVAnalysis_v2.0.0.exe" -PassThru
+Start-Process -FilePath "CVAnalysis_StandAlone_v2.0.1\start_gui.dist\CVAnalysis_v2.0.1.exe" -PassThru
 # 等待 30 秒，确认进程未退出
 ```
 

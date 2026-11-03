@@ -42,9 +42,17 @@ from cvanalysis.domain.units import (
 )
 from cvanalysis.plotting.axis_limits import set_axis_display_units
 from cvanalysis.plotting.colors import resolve_color_cycle
-from cvanalysis.plotting.legend import dataset_file_numbers, effective_template, preview_label, template_uses_cycle
+from cvanalysis.plotting.legend import (
+    cycle_legend_groups,
+    cycle_legend_limit,
+    dataset_file_numbers,
+    effective_template,
+    preview_label,
+    template_uses_cycle,
+)
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
+from cvanalysis.plotting.texts import axis_text, compact_text_enabled, plot_text
 
 
 def _option_float(options: dict, key: str, default: float, low: float, high: float) -> float:
@@ -249,6 +257,8 @@ def _set_labels(ax, style: PlotStyle, xlabel: str, ylabel: str) -> None:
 
 
 def _annotate(ax, style: PlotStyle, text: str, *, color: str = "#333333") -> None:
+    if not text:
+        return
     ax.text(
         0.98,
         0.04,
@@ -257,7 +267,7 @@ def _annotate(ax, style: PlotStyle, text: str, *, color: str = "#333333") -> Non
         ha="right",
         va="bottom",
         fontsize=style.annotation_size,
-        fontfamily=style.font_family,
+        fontfamily=style.text_font_family(),
         fontweight="bold" if style.annotation_bold else "normal",
         color=color,
         bbox=dict(boxstyle="round,pad=0.3", facecolor="#fff8e6", edgecolor="#d9c89e", alpha=0.9),
@@ -269,7 +279,7 @@ def _title(ax, style: PlotStyle, title: str) -> None:
         ax.set_title(
             title,
             fontsize=style.title_size,
-            fontfamily=style.font_family,
+            fontfamily=style.text_font_family(),
             fontweight="bold" if style.title_bold else "normal",
         )
 
@@ -287,6 +297,61 @@ def _finish(figure: Figure, style: PlotStyle, spec: PlotSpec) -> None:
     finalize_figure(figure, style)
     from cvanalysis.plotting.paper import finish_paper
     finish_paper(figure, spec, style)
+
+
+class _CycleRange:
+    """Minimal cycle-like object used to render a grouped legend template."""
+
+    __slots__ = ("index",)
+
+    def __init__(self, start: int, end: int):
+        self.index = f"{start}-{end}"
+
+
+def _cycle_range_text(spec: PlotSpec, run: CVRun, start: int, end: int, *, multi_run: bool) -> str:
+    if start == end:
+        if multi_run:
+            return plot_text(spec, "legend.cv_run_cycle", label=run.legend_name, cycle=start)
+        return plot_text(spec, "legend.cv_cycle", cycle=start)
+    if multi_run:
+        return plot_text(
+            spec,
+            "legend.cv_run_cycle_range",
+            label=run.legend_name,
+            start=start,
+            end=end,
+        )
+    return plot_text(spec, "legend.cv_cycle_range", start=start, end=end)
+
+
+def _plot_cv_cycle(
+    ax,
+    run: CVRun,
+    cycle,
+    spec: PlotSpec,
+    style: PlotStyle,
+    *,
+    normalization: str,
+    factor: float,
+    color: str,
+    label: str | None,
+) -> None:
+    current = normalize_current(
+        cycle.current,
+        normalization,
+        area_cm2=run.params.area_cm2,
+        mass_mg=run.params.mass_mg,
+    )
+    ax.plot(
+        cycle.potential,
+        np.asarray(current) * factor,
+        color=color,
+        linewidth=style.line_width,
+        marker=style.marker or None,
+        markersize=style.marker_size,
+        alpha=_option_float(spec.analysis_options, "line_alpha", 0.9, 0.05, 1.0),
+        label=label,
+    )
 
 
 def draw_cv_overlay(
@@ -314,28 +379,87 @@ def draw_cv_overlay(
     figure.clear()
     ax = figure.add_subplot(111)
     color_by_run = spec.color_by == "run" or (spec.color_by == "auto" and len(runs) > 1)
-    colors = resolve_color_cycle(style, max(sum(len(_selected_cycles(run, spec)) for run in runs), len(runs)), color_config)
+    grouped_limit = cycle_legend_limit(spec)
+    run_layouts = []
+    for run in runs:
+        cycles = [cycle for cycle in _selected_cycles(run, spec) if cycle.valid]
+        template = effective_template(run, spec)
+        per_cycle_template = template_uses_cycle(template)
+        per_cycle_labels = per_cycle_template or (not template and not color_by_run)
+        groups = (
+            cycle_legend_groups(cycles, grouped_limit, renumber=spec.renumber_cycles)
+            if per_cycle_labels
+            else None
+        )
+        run_layouts.append((run, cycles, template, per_cycle_template, groups))
+
+    colors = resolve_color_cycle(
+        style,
+        max(sum(len(_selected_cycles(run, spec)) for run in runs), len(runs)),
+        color_config,
+    )
     color_index = 0
     labeled_runs: set[int] = set()
     line_handles: list[tuple[str, str]] = []
     legend_warnings: set[str] = set()
     file_numbers = dataset_file_numbers(dataset)
+    multi_run = len(runs) > 1
 
-    for run_index, run in enumerate(runs):
-        cycles = [cycle for cycle in _selected_cycles(run, spec) if cycle.valid]
+    for run_index, (run, cycles, template, per_cycle_template, groups) in enumerate(run_layouts):
         if not cycles:
             warnings.append(f"{run.display_name} 没有可绘制的有效循环")
             continue
-        template = effective_template(run, spec)
-        per_cycle_template = template_uses_cycle(template)
+        rate = run.metadata.scan_rate
+        if groups is not None:
+            for group in groups:
+                if color_by_run:
+                    color = colors[run_index % len(colors)]
+                else:
+                    color = colors[color_index % len(colors)]
+                    color_index += 1
+                range_label = _cycle_range_text(
+                    spec,
+                    run,
+                    group.start,
+                    group.end,
+                    multi_run=multi_run,
+                )
+                if per_cycle_template:
+                    if group.start == group.end:
+                        cycle_ref = group.cycles[0]
+                        cycle_number = group.start
+                    else:
+                        cycle_ref = _CycleRange(group.start, group.end)
+                        cycle_number = cycle_ref.index
+                    label, unknown = preview_label(
+                        run,
+                        template,
+                        cycle=cycle_ref,
+                        cycle_number=cycle_number,
+                        file_number=file_numbers.get(run.run_id),
+                        fallback=range_label,
+                    )
+                    for token in unknown:
+                        legend_warnings.add(f"图例模板包含未知字段: {{{token}}}")
+                else:
+                    label = range_label
+                for offset, cycle in enumerate(group.cycles):
+                    _plot_cv_cycle(
+                        ax,
+                        run,
+                        cycle,
+                        spec,
+                        style,
+                        normalization=normalization,
+                        factor=factor,
+                        color=color,
+                        label=label if offset == 0 else None,
+                    )
+                line_handles.append((label, color))
+            continue
+
         run_display_index = 0
         for cycle in cycles:
-            current = normalize_current(
-                cycle.current,
-                normalization,
-                area_cm2=run.params.area_cm2,
-                mass_mg=run.params.mass_mg,
-            )
             if color_by_run:
                 color = colors[run_index % len(colors)]
             else:
@@ -343,7 +467,6 @@ def draw_cv_overlay(
             color_index += 1
             run_display_index += 1
             cycle_label = run_display_index if spec.renumber_cycles else cycle.index
-            rate = run.metadata.scan_rate
             if template:
                 if per_cycle_template:
                     label, unknown = preview_label(
@@ -352,7 +475,7 @@ def draw_cv_overlay(
                         cycle=cycle,
                         cycle_number=cycle_label,
                         file_number=file_numbers.get(run.run_id),
-                        fallback=f"Cycle {cycle_label}",
+                        fallback=plot_text(spec, "legend.cv_cycle", cycle=cycle_label),
                     )
                     for token in unknown:
                         legend_warnings.add(f"图例模板包含未知字段: {{{token}}}")
@@ -376,20 +499,31 @@ def draw_cv_overlay(
                 else:
                     label = run.legend_name
                     if rate:
-                        label += f" ({rate:g} V/s)"
+                        label = plot_text(
+                            spec,
+                            "legend.cv_run_rate",
+                            label=run.legend_name,
+                            rate=rate,
+                        )
                     labeled_runs.add(run_index)
-            elif len(runs) > 1:
-                label = f"{run.legend_name} C{cycle_label}"
+            elif multi_run:
+                label = plot_text(
+                    spec,
+                    "legend.cv_run_cycle",
+                    label=run.legend_name,
+                    cycle=cycle_label,
+                )
             else:
-                label = f"Cycle {cycle_label}"
-            ax.plot(
-                cycle.potential,
-                np.asarray(current) * factor,
+                label = plot_text(spec, "legend.cv_cycle", cycle=cycle_label)
+            _plot_cv_cycle(
+                ax,
+                run,
+                cycle,
+                spec,
+                style,
+                normalization=normalization,
+                factor=factor,
                 color=color,
-                linewidth=style.line_width,
-                marker=style.marker or None,
-                markersize=style.marker_size,
-                alpha=_option_float(spec.analysis_options, "line_alpha", 0.9, 0.05, 1.0),
                 label=label,
             )
             if label is not None:
@@ -397,16 +531,14 @@ def draw_cv_overlay(
     if legend_warnings:
         warnings.extend(sorted(legend_warnings))
 
-    ylabel = "Current (A)"
-    if normalization == "area":
-        ylabel = f"Current density ({unit})"
-    elif normalization == "mass":
-        ylabel = f"Specific current ({unit})"
-    else:
-        ylabel = f"Current ({unit})"
-    _set_labels(ax, style, "Potential (V)", ylabel)
+    _set_labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "y", normalization=normalization, unit=unit),
+    )
     set_axis_display_units(ax, x=("V", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title)
+    _title(ax, style, spec.title or plot_text(spec, "title.cv_overlay"))
 
     if style.legend and spec.show_legend and line_handles:
         columns = style.legend_columns if len(line_handles) > 8 else 1
@@ -445,14 +577,46 @@ def draw_cv_overlay(
                     mass_mg=run.params.mass_mg,
                 )
                 if mean_value is not None:
-                    text = f"Mean C = {mean_value * cap_factor:.4g} {cap_unit}"
+                    lines = [
+                        plot_text(
+                            spec,
+                            "annotation.cv_overlay.mean",
+                            mean=mean_value * cap_factor,
+                            unit=cap_unit,
+                        )
+                    ]
                     if sd_value is not None and np.isfinite(sd_value):
-                        text += f"\nSD = {sd_value * cap_factor:.4g} {cap_unit}"
-                    text += f"\nN = {len(selected_cycles)}"
-                    _annotate(ax, style, text)
+                        lines.append(
+                            plot_text(
+                                spec,
+                                "annotation.cv_overlay.sd",
+                                sd=sd_value * cap_factor,
+                                unit=cap_unit,
+                            )
+                        )
+                    lines.append(
+                        plot_text(
+                            spec,
+                            "annotation.cv_overlay.n",
+                            n=len(selected_cycles),
+                        )
+                    )
+                    _annotate(ax, style, "\n".join(line for line in lines if line))
         else:
             total_cycles = sum(len(_selected_cycles(run, spec)) for run in runs)
-            _annotate(ax, style, f"{len(runs)} runs\n{total_cycles} cycles")
+            lines = [
+                plot_text(
+                    spec,
+                    "annotation.cv_overlay.multi_runs",
+                    runs=len(runs),
+                ),
+                plot_text(
+                    spec,
+                    "annotation.cv_overlay.multi_cycles",
+                    cycles=total_cycles,
+                ),
+            ]
+            _annotate(ax, style, "\n".join(line for line in lines if line))
     if warnings:
         ax.text(
             0.02,
@@ -568,6 +732,7 @@ def draw_cap_scan(
         y_request, values, lower_bounds=lower_bounds
     )
     warnings.extend(message for message in (x_warning, y_warning) if message)
+    compact = compact_text_enabled(spec)
     ax.set_xscale(x_scale)
     ax.set_yscale(y_scale)
     ax.errorbar(
@@ -579,7 +744,7 @@ def draw_cap_scan(
         markersize=max(4.0, style.marker_size + 2),
         linewidth=style.line_width,
         capsize=3,
-        label="Measured",
+        label=plot_text(spec, "legend.measured"),
     )
     if fit_method != "none" and np.unique(np.round(rates, 12)).size >= 2:
         if x_scale == "log":
@@ -594,7 +759,13 @@ def draw_cap_scan(
             total = float(np.sum((values - np.mean(values)) ** 2))
             r2 = 1 - float(np.sum((values - prediction) ** 2)) / total if total > 0 else float("nan")
             fit_y = (slope * fit_x + intercept) * factor
-            equation = f"C = {slope * factor:.4g} v + {intercept * factor:.4g} {unit}"
+            equation = plot_text(
+                spec,
+                "annotation.cv_cap_scan.equation_linear",
+                slope=slope * factor,
+                intercept=intercept * factor,
+                unit=unit,
+            )
         elif fit_method == "coordinate_line":
             # Fit a line in the coordinates the viewer sees, then invert each
             # transform so Matplotlib draws a straight line on the selected axes.
@@ -609,34 +780,66 @@ def draw_cap_scan(
             fit_x = 10**fit_x_data if x_scale == "log" else fit_x_data
             fit_y_data = slope * fit_x_data + intercept
             fit_y = 10**fit_y_data if y_scale == "log" else fit_y_data
-            x_term = "log10(v)" if x_scale == "log" else "v"
-            y_term = "log10(C)" if y_scale == "log" else "C"
-            equation = f"{y_term} = {slope:.4g}·{x_term} + {intercept:.4g}"
+            x_term = plot_text(
+                spec,
+                "annotation.cv_cap_scan.term_x_log" if x_scale == "log" else "annotation.cv_cap_scan.term_x_linear",
+            )
+            y_term = plot_text(
+                spec,
+                "annotation.cv_cap_scan.term_y_log" if y_scale == "log" else "annotation.cv_cap_scan.term_y_linear",
+            )
+            equation = plot_text(
+                spec,
+                "annotation.cv_cap_scan.equation_coordinate",
+                y_term=y_term,
+                slope=slope,
+                x_term=x_term,
+                intercept=intercept,
+            )
         else:
             slope, intercept, r2 = _fit_power_law(rates, values)
             fit_y = (10**intercept) * fit_x**slope * factor
-            equation = f"C = {10**intercept * factor:.4g} v^{slope:.3f}"
+            equation = plot_text(
+                spec,
+                "annotation.cv_cap_scan.equation_power",
+                a=10**intercept * factor,
+                n=slope,
+            )
         fit_is_straight = (
             fit_method == "coordinate_line"
             or (fit_method == "linear" and x_scale == "linear" and y_scale == "linear")
             or (fit_method == "power" and x_scale == "log" and y_scale == "log")
         )
-        fit_label = "Fitted Line" if fit_is_straight else "Fitted Curve"
+        fit_label = plot_text(
+            spec,
+            "legend.fitted_line" if fit_is_straight else "legend.fitted_curve",
+        )
         if fit_method == "linear" and y_scale == "log" and np.any(fit_y <= 0):
             warnings.append("一次函数在部分扫速处预测值非正，纵轴为对数时该段拟合线不可见")
             fit_y = np.where(fit_y > 0, fit_y, np.nan)
         if options.get("fit_line", True):
             ax.plot(fit_x, fit_y, "--", color=colors[1], linewidth=style.line_width, label=fit_label)
         if style.annotation and spec.annotations:
-            compact = spec.paper_layout.get("enabled") and spec.paper_layout.get("fraction", 1) * spec.paper_layout.get("text_width_mm", 160) <= 85
-            compact_text = f"n={slope:.2f}; R²={r2:.3f}" if fit_method == "power" else f"R²={r2:.3f}"
-            _annotate(ax, style, compact_text if compact else f"{equation}\nR² = {r2:.4f}")
+            if compact:
+                annotation = plot_text(
+                    spec,
+                    "annotation.cv_cap_scan.compact_power" if fit_method == "power" else "annotation.cv_cap_scan.compact_r2",
+                    n=slope,
+                    r2=r2,
+                )
+            else:
+                r2_line = plot_text(spec, "annotation.cv_cap_scan.r2", r2=r2)
+                annotation = "\n".join(line for line in (equation, r2_line) if line)
+            _annotate(ax, style, annotation)
     if x_scale == "log":
         ax.xaxis.set_major_formatter(mticker.LogFormatterSciNotation())
-    _set_labels(ax, style, "Scan rate (V/s)", f"Capacitance ({unit})")
-    if spec.paper_layout.get("enabled") and spec.paper_layout.get("fraction", 1) * spec.paper_layout.get("text_width_mm", 160) <= 85:
-        _set_labels(ax, style, "v (V/s)", f"C ({unit})")
-    _title(ax, style, spec.title or "Capacitance vs scan rate")
+    _set_labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x", compact=compact),
+        axis_text(spec, "main", "y", unit=unit, compact=compact),
+    )
+    _title(ax, style, spec.title or plot_text(spec, "title.cv_cap_scan"))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
@@ -693,19 +896,18 @@ def draw_current_scan(
 
     figure.clear()
     ax = figure.add_subplot(111)
-    ax.plot(rates, np.abs(up_values) * factor, "o-", color=colors[0], linewidth=style.line_width, markersize=style.marker_size + 1, label="Forward |i|")
-    ax.plot(rates, np.abs(down_values) * factor, "s--", color=colors[1], linewidth=style.line_width, markersize=style.marker_size, label="Reverse |i|")
+    ax.plot(rates, np.abs(up_values) * factor, "o-", color=colors[0], linewidth=style.line_width, markersize=style.marker_size + 1, label=plot_text(spec, "legend.forward_current"))
+    ax.plot(rates, np.abs(down_values) * factor, "s--", color=colors[1], linewidth=style.line_width, markersize=style.marker_size, label=plot_text(spec, "legend.reverse_current"))
     if spec.x_log or (np.max(rates) / max(np.min(rates), 1e-30) >= 20):
         ax.set_xscale("log")
-    if normalization == "area":
-        ylabel = f"Current density ({unit})"
-    elif normalization == "mass":
-        ylabel = f"Specific current ({unit})"
-    else:
-        ylabel = f"Current ({unit})"
-    _set_labels(ax, style, "Scan rate (V/s)", ylabel)
+    _set_labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "y", normalization=normalization, unit=unit),
+    )
     set_axis_display_units(ax, x=("V/s", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title or f"Current at {target:g} V")
+    _title(ax, style, spec.title or plot_text(spec, "title.cv_current_scan", target=target))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
@@ -777,27 +979,31 @@ def draw_b_value(
 
     figure.clear()
     ax = figure.add_subplot(111)
-    ax.loglog(rates_arr, currents_arr * factor, "o", color=colors[0], markersize=style.marker_size + 2, label="Measured")
+    ax.loglog(rates_arr, currents_arr * factor, "o", color=colors[0], markersize=style.marker_size + 2, label=plot_text(spec, "legend.measured"))
     fit_x = np.geomspace(float(np.min(rates_arr)), float(np.max(rates_arr)), 100)
-    ax.loglog(fit_x, (10**intercept) * fit_x**slope * factor, "-", color=colors[0], linewidth=style.line_width, label="Fitted Line")
+    ax.loglog(fit_x, (10**intercept) * fit_x**slope * factor, "-", color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.fitted_line"))
     for guide, guide_color in ((0.5, "#999999"), (1.0, "#bbbbbb")):
-        ax.loglog(fit_x, fit_x**guide * (currents_arr[0] / rates_arr[0] ** 0.5) * factor, ":", color=guide_color, linewidth=0.9, label=f"b = {guide:g}")
-    if normalization == "area":
-        ylabel = f"|Current density| ({unit})"
-    elif normalization == "mass":
-        ylabel = f"|Specific current| ({unit})"
-    else:
-        ylabel = f"|Current| ({unit})"
-    _set_labels(ax, style, "Scan rate (V/s)", ylabel)
+        ax.loglog(fit_x, fit_x**guide * (currents_arr[0] / rates_arr[0] ** 0.5) * factor, ":", color=guide_color, linewidth=0.9, label=plot_text(spec, "legend.guide_b", guide=guide))
+    _set_labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "y", normalization=normalization, unit=unit),
+    )
     set_axis_display_units(ax, x=("V/s", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title or f"b-value at {target:g} V")
+    _title(ax, style, spec.title or plot_text(spec, "title.cv_bvalue", target=target))
     # This is a log/log chart. Keep decade labels and suppress the minor
     # scientific-notation labels that collide when the scan-rate range is
     # narrow (a common case with only a few selected runs).
     ax.xaxis.set_major_formatter(mticker.LogFormatterSciNotation(labelOnlyBase=True))
     ax.xaxis.set_minor_formatter(mticker.NullFormatter())
     if style.annotation and spec.annotations:
-        _annotate(ax, style, f"b = {slope:.3f}\nR² = {r2:.4f}\nN = {len(rates)}")
+        lines = [
+            plot_text(spec, "annotation.cv_bvalue.b", b=slope),
+            plot_text(spec, "annotation.cv_bvalue.r2", r2=r2),
+            plot_text(spec, "annotation.cv_bvalue.n", n=len(rates)),
+        ]
+        _annotate(ax, style, "\n".join(line for line in lines if line))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
@@ -842,9 +1048,9 @@ def draw_contribution(
     total = result.total_current * factor
     capacitive = result.capacitive_current * factor
     diffusive = result.diffusive_current * factor
-    ax.plot(x, total, color="#222222", linewidth=style.line_width, label="Total")
-    ax.plot(x, capacitive, color=colors[0], linewidth=style.line_width, label="Capacitive")
-    ax.plot(x, diffusive, color=colors[1], linewidth=style.line_width, label="Diffusive")
+    ax.plot(x, total, color="#222222", linewidth=style.line_width, label=plot_text(spec, "legend.total"))
+    ax.plot(x, capacitive, color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.capacitive"))
+    ax.plot(x, diffusive, color=colors[1], linewidth=style.line_width, label=plot_text(spec, "legend.diffusive"))
     ax.fill_between(
         x,
         capacitive,
@@ -852,17 +1058,20 @@ def draw_contribution(
         color=colors[0],
         alpha=_option_float(spec.analysis_options, "fill_alpha", 0.12, 0.0, 1.0),
     )
-    if result.normalization == "area":
-        ylabel = f"Current density ({unit})"
-    elif result.normalization == "mass":
-        ylabel = f"Specific current ({unit})"
-    else:
-        ylabel = f"Current ({unit})"
-    _set_labels(ax, style, "Potential (V)", ylabel)
+    _set_labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "y", normalization=result.normalization, unit=unit),
+    )
     set_axis_display_units(ax, x=("V", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title or f"Dunn current decomposition at {result.scan_rate:g} V/s")
+    _title(ax, style, spec.title or plot_text(spec, "title.cv_contribution", scan_rate=result.scan_rate))
     if style.annotation and spec.annotations:
-        _annotate(ax, style, f"Capacitive = {result.capacitive_fraction * 100:.1f}%\nMean R² = {result.mean_r2:.3f}")
+        lines = [
+            plot_text(spec, "annotation.cv_contribution.capacitive", pct=result.capacitive_fraction * 100),
+            plot_text(spec, "annotation.cv_contribution.mean_r2", r2=result.mean_r2),
+        ]
+        _annotate(ax, style, "\n".join(line for line in lines if line))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
@@ -941,24 +1150,23 @@ def draw_trasatti(
 
     figure.clear()
     ax = figure.add_subplot(111)
-    ax.plot(x_values, y_values * factor, "o", color=colors[0], markersize=style.marker_size + 2, label="Measured")
+    ax.plot(x_values, y_values * factor, "o", color=colors[0], markersize=style.marker_size + 2, label=plot_text(spec, "legend.measured"))
     fit_x = np.linspace(float(np.min(x_values)), float(np.max(x_values)), 100)
-    ax.plot(fit_x, (intercept + slope * fit_x) * factor, "-", color=colors[0], linewidth=style.line_width, label="Fitted Line")
-    if normalization == "area":
-        ylabel = f"Charge density ({unit})"
-    elif normalization == "mass":
-        ylabel = f"Specific charge ({unit})"
-    else:
-        ylabel = f"Charge ({unit})"
-    _set_labels(ax, style, r"$v^{-1/2}$ (V/s)$^{-1/2}$", ylabel)
-    _title(ax, style, spec.title or "Trasatti charge separation")
+    ax.plot(fit_x, (intercept + slope * fit_x) * factor, "-", color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.fitted_line"))
+    _set_labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "y", normalization=normalization, unit=unit),
+    )
+    _title(ax, style, spec.title or plot_text(spec, "title.cv_trasatti"))
     if style.annotation and spec.annotations:
-        _annotate(
-            ax,
-            style,
-            f"q_cap = {intercept * factor:.4g} {unit}\n"
-            f"Capacitive fraction = {fraction * 100:.1f}%\nR? = {r2:.4f}",
-        )
+        lines = [
+            plot_text(spec, "annotation.cv_trasatti.q_cap", q_cap=intercept * factor, unit=unit),
+            plot_text(spec, "annotation.cv_trasatti.fraction", pct=fraction * 100),
+            plot_text(spec, "annotation.cv_trasatti.r2", r2=r2),
+        ]
+        _annotate(ax, style, "\n".join(line for line in lines if line))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
@@ -1005,8 +1213,8 @@ def draw_contribution_vs_rate(
     ax = figure.add_subplot(111)
     bar_width = _option_float(spec.analysis_options, "bar_width", 0.72, 0.1, 1.0)
     bar_alpha = _option_float(spec.analysis_options, "bar_alpha", 1.0, 0.05, 1.0)
-    ax.bar(positions, capacitive, width=bar_width, alpha=bar_alpha, color=colors[0], label="Capacitive")
-    ax.bar(positions, diffusive, bottom=capacitive, width=bar_width, alpha=bar_alpha, color=colors[1], label="Diffusive")
+    ax.bar(positions, capacitive, width=bar_width, alpha=bar_alpha, color=colors[0], label=plot_text(spec, "legend.capacitive"))
+    ax.bar(positions, diffusive, bottom=capacitive, width=bar_width, alpha=bar_alpha, color=colors[1], label=plot_text(spec, "legend.diffusive"))
     ax.set_xticks(positions)
     ax.set_xticklabels([f"{rate:g}" for rate in rates])
     ax.set_ylim(0.0, 100.0)
@@ -1014,8 +1222,13 @@ def draw_contribution_vs_rate(
         ax.tick_params(axis="x", labelrotation=45)
         for label in ax.get_xticklabels():
             label.set_horizontalalignment("right")
-    _set_labels(ax, style, "Scan rate (V/s)", "Contribution (%)")
-    _title(ax, style, spec.title or "Contribution vs scan rate")
+    _set_labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "y"),
+    )
+    _title(ax, style, spec.title or plot_text(spec, "title.cv_contribution_vs_rate"))
 
     if style.annotation and spec.annotations:
         for position, cap_value, diff_value in zip(positions, capacitive, diffusive):
@@ -1023,25 +1236,29 @@ def draw_contribution_vs_rate(
                 ax.text(
                     position,
                     cap_value / 2.0,
-                    f"{cap_value:.0f}%",
+                    plot_text(spec, "annotation.cv_contribution_vs_rate.bar_pct", pct=cap_value),
                     ha="center",
                     va="center",
                     fontsize=max(6.0, style.annotation_size - 1),
                     color="white" if cap_value > 18 else "#263238",
-                    fontfamily=style.font_family,
+                    fontfamily=style.text_font_family(),
                 )
             if np.isfinite(diff_value) and diff_value > 18:
                 ax.text(
                     position,
                     cap_value + diff_value / 2.0,
-                    f"{diff_value:.0f}%",
+                    plot_text(spec, "annotation.cv_contribution_vs_rate.bar_pct", pct=diff_value),
                     ha="center",
                     va="center",
                     fontsize=max(6.0, style.annotation_size - 1),
                     color="white",
-                    fontfamily=style.font_family,
+                    fontfamily=style.text_font_family(),
                 )
-        _annotate(ax, style, f"N = {len(rates)} rates\nMean R² = {result.mean_r2:.3f}")
+        lines = [
+            plot_text(spec, "annotation.cv_contribution_vs_rate.n", n=len(rates)),
+            plot_text(spec, "annotation.cv_contribution_vs_rate.mean_r2", r2=result.mean_r2),
+        ]
+        _annotate(ax, style, "\n".join(line for line in lines if line))
 
     if style.legend and spec.show_legend:
         legend = ax.legend(

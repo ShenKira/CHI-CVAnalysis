@@ -20,6 +20,7 @@ from cvanalysis.plotting.axis_limits import (
     common_axis_display_unit,
     plot_axis_specs,
 )
+from cvanalysis.plotting.legend import DEFAULT_CYCLE_LEGEND_LIMIT
 from cvanalysis.plotting.paper import paper_legend_settings, paper_overrides
 
 
@@ -291,6 +292,24 @@ class AnalysisOptionsPanel(QWidget):
             cb.setChecked(getattr(spec, key))
             self.form.addRow(cb)
             self.controls[key] = cb
+        if spec.kind == "cv_overlay":
+            try:
+                legend_limit = int(
+                    spec.analysis_options.get(
+                        "legend_cycle_limit", DEFAULT_CYCLE_LEGEND_LIMIT
+                    )
+                )
+            except (TypeError, ValueError, OverflowError):
+                legend_limit = DEFAULT_CYCLE_LEGEND_LIMIT
+            control = self.spin(0, 500, max(0, min(500, legend_limit)))
+            control.setDecimals(0)
+            control.setSingleStep(1)
+            control.setToolTip(
+                "单个 CV 数据的循环图例上限。超过上限时按连续循环范围合并；"
+                "例如 500 个循环、上限 10 时显示 1-50、51-100……；0 表示不合并。"
+            )
+            self.form.addRow("循环图例上限", control)
+            self.controls["legend_cycle_limit"] = control
         data = spec.paper_layout
         self.paper_enabled.setChecked(data.get("enabled", False))
         self.fraction.setText(str(data.get("fraction", .5)))
@@ -739,6 +758,8 @@ class AnalysisOptionsPanel(QWidget):
                     "show_efficiency",
                 ):
                     analysis[key] = control.isChecked()
+                elif key == "legend_cycle_limit":
+                    analysis[key] = int(round(control.value()))
                 elif isinstance(control, QCheckBox):
                     changes[key] = control.isChecked()
                 elif isinstance(control, QLineEdit):

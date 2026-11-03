@@ -363,15 +363,19 @@ class PlotStyle:
             label.set_fontfamily(self.font_family)
             label.set_fontsize(self.tick_size)
 
+    def text_font_family(self) -> tuple[str, ...]:
+        families = list(self.font_family)
+        for name in (*_available_cjk_fonts(), "DejaVu Sans"):
+            if name not in families:
+                families.append(name)
+        return tuple(families)
+
     def style_legend(self, legend):
         if legend is None:
             return
         legend.set_frame_on(self.legend_frame)
         legend.shadow = self.legend_shadow
-        families = list(self.font_family)
-        for name in _available_cjk_fonts():
-            if name not in families:
-                families.append(name)
+        families = list(self.text_font_family())
         for text in legend.get_texts():
             text.set_fontfamily(families)
             text.set_fontsize(self.legend_size)
@@ -405,7 +409,7 @@ def font_kwargs(
         else:
             bold = style.label_bold
     return {
-        "fontfamily": style.font_family,
+        "fontfamily": style.text_font_family(),
         "fontsize": size,
         "fontweight": "bold" if bold else "normal",
     }

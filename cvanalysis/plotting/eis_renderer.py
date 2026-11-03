@@ -26,6 +26,7 @@ from cvanalysis.plotting.colors import resolve_color_cycle
 from cvanalysis.plotting.legend import dataset_file_numbers, effective_template, preview_label
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
+from cvanalysis.plotting.texts import axis_text, plot_text
 
 
 _CJK_FONT_CACHE: list[str] | None = None
@@ -194,6 +195,7 @@ def _format_metrics(
     run: EISRun,
     metrics: EISMetrics | None,
     fit: EISFitResult | None,
+    spec: PlotSpec,
     *,
     impedance_override: str | None = None,
     normalization: str = "none",
@@ -214,29 +216,59 @@ def _format_metrics(
         rs, rs_family = _impedance_metric(rs, run, normalization)
         rct, rct_family = _impedance_metric(rct, run, normalization)
         lines = [
-            fit.model_label,
-            f"Rs = {_format_metric_with_unit(rs, rs_family, impedance_override)}",
-            f"Rct = {_format_metric_with_unit(rct, rct_family, impedance_override)}",
+            plot_text(spec, "annotation.eis.model", model=fit.model_label),
+            plot_text(
+                spec,
+                "annotation.eis.rs",
+                value=_format_metric_with_unit(rs, rs_family, impedance_override),
+            ),
+            plot_text(
+                spec,
+                "annotation.eis.rct",
+                value=_format_metric_with_unit(rct, rct_family, impedance_override),
+            ),
         ]
         if c_eff:
-            lines.append(f"Ceff = {format_with_unit(c_eff, CAPACITANCE, digits=3)}")
-        lines.append(f"R² = {fit.r2:.4f}")
-        return "\n".join(lines)
+            lines.append(
+                plot_text(
+                    spec,
+                    "annotation.eis.ceff",
+                    value=format_with_unit(c_eff, CAPACITANCE, digits=3),
+                )
+            )
+        lines.append(plot_text(spec, "annotation.eis.r2", value=fit.r2))
+        return "\n".join(line for line in lines if line)
     if metrics is not None:
         rs, rs_family = _impedance_metric(metrics.rs_ohm, run, normalization)
         lines = [
-            f"Rs = {_format_metric_with_unit(rs, rs_family, impedance_override)}"
+            plot_text(
+                spec,
+                "annotation.eis.rs",
+                value=_format_metric_with_unit(rs, rs_family, impedance_override),
+            )
         ]
         if metrics.rct_ohm:
             rct, rct_family = _impedance_metric(metrics.rct_ohm, run, normalization)
             lines.append(
-                f"Rct ≈ {_format_metric_with_unit(rct, rct_family, impedance_override)}"
+                plot_text(
+                    spec,
+                    "annotation.eis.rct_approx",
+                    value=_format_metric_with_unit(rct, rct_family, impedance_override),
+                )
             )
         if metrics.cdl_F:
-            lines.append(f"Cdl ≈ {format_with_unit(metrics.cdl_F, CAPACITANCE, digits=3)}")
+            lines.append(
+                plot_text(
+                    spec,
+                    "annotation.eis.cdl_approx",
+                    value=format_with_unit(metrics.cdl_F, CAPACITANCE, digits=3),
+                )
+            )
         if metrics.f_peak_hz:
-            lines.append(f"f0 ≈ {metrics.f_peak_hz:.3g} Hz")
-        return "\n".join(lines)
+            lines.append(
+                plot_text(spec, "annotation.eis.f0", value=metrics.f_peak_hz)
+            )
+        return "\n".join(line for line in lines if line)
     return ""
 
 
@@ -244,7 +276,7 @@ def _annotate(ax, style: PlotStyle, text: str) -> None:
     if not text:
         return
     ax.text(0.02, 0.04, text, transform=ax.transAxes, ha="left", va="bottom",
-            fontsize=style.annotation_size, fontfamily=style.font_family,
+            fontsize=style.annotation_size, fontfamily=style.text_font_family(),
             fontweight="bold" if style.annotation_bold else "normal",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="#fff8e6", edgecolor="#d9c89e", alpha=0.9))
 
@@ -333,21 +365,28 @@ def draw_nyquist(
             y_series.append(y_fit)
             ax.plot(x_fit, y_fit, "--", color=color,
                     linewidth=max(1.0, style.line_width), alpha=0.9,
-                    label=f"{label} fit")
+                    label=plot_text(spec, "legend.eis_fit_suffix", label=label))
         if style.annotation and spec.annotations and len(runs) == 1:
             text = _format_metrics(
                 run,
                 metrics.get(run.run_id),
                 fit if spec.fit_enabled else None,
+                spec,
                 impedance_override=impedance_override,
                 normalization=normalization,
             )
             _annotate(ax, style, text)
 
-    _labels(ax, style, f"Z' ({unit})", f"-Z'' ({unit})")
+    _labels(
+        ax,
+        style,
+        axis_text(spec, "main", "x", unit=unit),
+        axis_text(spec, "main", "y", unit=unit),
+    )
     set_axis_display_units(ax, x=(unit, factor), y=(unit, factor))
-    if spec.title and style.show_title:
-        ax.set_title(spec.title, fontsize=style.title_size, fontfamily=style.font_family,
+    title = spec.title or plot_text(spec, "title.eis_nyquist")
+    if title and style.show_title:
+        ax.set_title(title, fontsize=style.title_size, fontfamily=style.text_font_family(),
                      fontweight="bold" if style.title_bold else "normal")
     if style.nyquist_equal_aspect and _equal_aspect_reasonable(x_series, y_series):
         ax.set_aspect("equal", adjustable="datalim")
@@ -410,13 +449,24 @@ def draw_bode(
             ax_phase.axvline(metric.f_peak_hz, color=color, linestyle=":", linewidth=0.9, alpha=0.8)
             ax_mag.axvline(metric.f_peak_hz, color=color, linestyle=":", linewidth=0.9, alpha=0.8)
 
-    phase_label = "Phase (°)" if spec.paper_layout.get("enabled") else "Phase angle (°)"
-    _labels(ax_phase, style, "", phase_label)
-    _labels(ax_mag, style, "Frequency (Hz)", f"|Z| ({unit})")
+    paper_labels = bool(spec.paper_layout.get("enabled"))
+    _labels(
+        ax_phase,
+        style,
+        axis_text(spec, "phase", "x", compact=paper_labels),
+        axis_text(spec, "phase", "y", compact=paper_labels),
+    )
+    _labels(
+        ax_mag,
+        style,
+        axis_text(spec, "magnitude", "x"),
+        axis_text(spec, "magnitude", "y", unit=unit),
+    )
     set_axis_display_units(ax_phase, x=("Hz", 1.0), y=("°", 1.0))
     set_axis_display_units(ax_mag, x=("Hz", 1.0), y=(unit, factor))
-    if spec.title and style.show_title:
-        ax_phase.set_title(spec.title, fontsize=style.title_size, fontfamily=style.font_family,
+    title = spec.title or plot_text(spec, "title.eis_bode")
+    if title and style.show_title:
+        ax_phase.set_title(title, fontsize=style.title_size, fontfamily=style.text_font_family(),
                            fontweight="bold" if style.title_bold else "normal")
     if style.legend and spec.show_legend:
         legend = ax_phase.legend(loc=style.legend_location, fontsize=style.legend_size,
@@ -482,11 +532,11 @@ def draw_fit(
         x_series.append(x_fit)
         y_series.append(y_fit)
         ax.plot(x_fit, y_fit, "-", color=color, linewidth=style.line_width,
-                label=f"{label} fit")
+                label=plot_text(spec, "legend.eis_fit_suffix", label=label))
         ax_res.semilogx(fit.frequencies, fit.residual_real * factor, "o", color=color,
-                        markersize=max(2, style.marker_size - 2), label="Real residual")
+                        markersize=max(2, style.marker_size - 2), label=plot_text(spec, "legend.real_residual"))
         ax_res.semilogx(fit.frequencies, fit.residual_imag * factor, "x", color=color,
-                        markersize=max(2, style.marker_size - 1), label="Imag residual")
+                        markersize=max(2, style.marker_size - 1), label=plot_text(spec, "legend.imag_residual"))
         if style.annotation and spec.annotations and len(available) == 1:
             _annotate(
                 ax,
@@ -495,14 +545,29 @@ def draw_fit(
                     run,
                     metrics.get(run.run_id),
                     fit,
+                    spec,
                     impedance_override=impedance_override,
                     normalization=normalization,
                 ),
             )
-    _labels(ax, style, f"Z' ({unit})", f"-Z'' ({unit})")
-    _labels(ax_res, style, "Frequency (Hz)", f"Residual ({unit})")
+    _labels(
+        ax,
+        style,
+        axis_text(spec, "nyquist", "x", unit=unit),
+        axis_text(spec, "nyquist", "y", unit=unit),
+    )
+    _labels(
+        ax_res,
+        style,
+        axis_text(spec, "residual", "x"),
+        axis_text(spec, "residual", "y", unit=unit),
+    )
     set_axis_display_units(ax, x=(unit, factor), y=(unit, factor))
     set_axis_display_units(ax_res, x=("Hz", 1.0), y=(unit, factor))
+    title = spec.title or plot_text(spec, "title.eis_fit")
+    if title and style.show_title:
+        ax.set_title(title, fontsize=style.title_size, fontfamily=style.text_font_family(),
+                     fontweight="bold" if style.title_bold else "normal")
     ax_res.axhline(0.0, color="#666666", linewidth=0.8)
     if style.nyquist_equal_aspect and _equal_aspect_reasonable(x_series, y_series):
         ax.set_aspect("equal", adjustable="datalim")

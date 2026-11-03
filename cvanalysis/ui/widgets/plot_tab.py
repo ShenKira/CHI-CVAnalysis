@@ -121,6 +121,7 @@ class PlotTab(QWidget):
         metrics: dict[str, EISMetrics] | None = None,
         color_config: dict | None = None,
         user_presets: dict | None = None,
+        text_values: dict | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -133,7 +134,9 @@ class PlotTab(QWidget):
         self.metrics = metrics or {}
         self.color_config = color_config or {}
         self.user_presets = user_presets or {}
+        self.text_values = dict(text_values or {})
         self.warnings: list[str] = []
+        self.dirty = False
         self._fit_to_view = True
         self._build_ui()
         self.redraw()
@@ -317,6 +320,7 @@ class PlotTab(QWidget):
         metrics: dict[str, EISMetrics] | None = None,
         color_config: dict | None = None,
         user_presets: dict | None = None,
+        text_values: dict | None = None,
     ) -> None:
         self.dataset = dataset
         if fits is not None:
@@ -325,6 +329,8 @@ class PlotTab(QWidget):
             self.metrics = metrics
         if color_config is not None:
             self.color_config = color_config
+        if text_values is not None:
+            self.text_values = dict(text_values)
         if user_presets is not None:
             self.user_presets = user_presets
             current = self.spec.preset
@@ -345,6 +351,11 @@ class PlotTab(QWidget):
         self.spec.preset = style.name
         self.set_preset_name(style.name)
         self.redraw()
+
+    def set_text_values(self, values: dict | None, *, redraw: bool = True) -> None:
+        self.text_values = dict(values or {})
+        if redraw:
+            self.redraw()
 
     def apply_overrides(self, overrides: dict) -> None:
         self.spec.overrides = dict(overrides)
@@ -372,6 +383,10 @@ class PlotTab(QWidget):
             f"本图当前选择 {count} 个数据；点击选择绘制数据和本图图例模板"
         )
 
+    def mark_dirty(self) -> None:
+        """Request a redraw when the tab becomes visible again."""
+        self.dirty = True
+
     def redraw(self) -> None:
         self.style = self.base_style.with_overrides(self.spec.overrides)
         self.style = self.style.with_overrides(paper_overrides(self.spec.paper_layout, self.style))
@@ -388,6 +403,7 @@ class PlotTab(QWidget):
                 color_config=self.color_config,
                 fits=self.fits,
                 metrics=self.metrics,
+                text_values=self.text_values,
             )
         except Exception as exc:  # noqa: BLE001
             self.figure.clear()
@@ -408,6 +424,7 @@ class PlotTab(QWidget):
             self.warnings = [str(exc)]
         self.canvas.draw_idle()
         self.warning_label.setText("；".join(self.warnings[:3]))
+        self.dirty = False
         self.rendered.emit(self)
 
     def export_plot(self) -> None:
@@ -452,6 +469,7 @@ class PlotTab(QWidget):
                 color_config=self.color_config,
                 fits=self.fits,
                 metrics=self.metrics,
+                text_values=self.text_values,
             )
             export_figure(figure, output, export_style)
             self.message.emit(f"图表已导出: {output}")
@@ -467,6 +485,7 @@ class PlotTab(QWidget):
                 color_config=self.color_config,
                 fits=self.fits,
                 metrics=self.metrics,
+                text_values=self.text_values,
             )
             buffer = BytesIO()
             figure.savefig(buffer, format="png", dpi=self.style.save_dpi, facecolor=figure.get_facecolor())
@@ -487,6 +506,7 @@ class PlotTab(QWidget):
                 color_config=self.color_config,
                 fits=self.fits,
                 metrics=self.metrics,
+                text_values=self.text_values,
             )
             mime = QMimeData()
             mime.setData("image/svg+xml", QByteArray(svg))
