@@ -38,11 +38,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cvanalysis.appearance import normalize_theme
 from cvanalysis.analysis.eis import metrics_from_fit
 from cvanalysis.analysis.fitting import EISFitResult
 from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun, ElectrodeParams
 from cvanalysis.domain.units import CURRENT, format_with_unit
-from cvanalysis.plotting.legend import dataset_file_numbers, preview_label
+from cvanalysis.plotting.legend import (
+    dataset_file_numbers,
+    default_filename_label,
+    preview_label,
+    resolve_legend_labels,
+)
 from cvanalysis.plotting.presets import BUILTIN_PRESETS, DEFAULT_PRESET_NAME, preset_label, preset_names
 from cvanalysis.plotting.spec import PLOT_KINDS, PlotSpec
 from cvanalysis.services.dataset_service import (
@@ -58,15 +64,15 @@ from cvanalysis.services.settings_service import (
     SettingsService,
     app_data_dir,
 )
-from cvanalysis.ui.dialogs.legend_dialog import LegendTemplateDialog
+from cvanalysis.ui.dialogs.legend_dialog import LegendAliasDialog, LegendTemplateDialog
 from cvanalysis.ui.dialogs.plot_data_dialog import PlotDataDialog
 from cvanalysis.ui.dialogs.preset_manager_dialog import PresetManagerDialog
 from cvanalysis.ui.dialogs.quick_style_dialog import QuickStyleDialog
 from cvanalysis.ui.dialogs.settings_dialog import SettingsDialog
 from cvanalysis.ui.dialogs.style_dialog import StyleEditorDialog
 from cvanalysis.ui.logging_utils import QtLogHandler, configure_logging
-from cvanalysis.ui.models.dataset_model import DatasetTreeModel
-from cvanalysis.ui.theme import application_stylesheet
+from cvanalysis.ui.models.dataset_model import ALIAS_COLUMN, DatasetTreeModel
+from cvanalysis.ui.theme import apply_theme_role, application_stylesheet
 from cvanalysis.ui.widgets.analysis_panel import AnalysisPanel
 from cvanalysis.ui.widgets.plot_tab import PlotTab
 from cvanalysis.ui.widgets.view_columns import ViewColumns
@@ -98,6 +104,10 @@ class MainWindow(QMainWindow):
         self._loading_project = False
         self._resetting_project = False
         self._ui_scale = _safe_ui_scale(self.settings_service.ui_state.get("scale", 1.0))
+        self._ui_theme = normalize_theme(
+            self.settings_service.ui_state.get("theme", "default"),
+            self.settings_service.theme_ids(),
+        )
         self.dataset = Dataset()
         self.dataset_model = DatasetTreeModel(self)
         self.fits: dict[str, EISFitResult] = {}
@@ -166,11 +176,23 @@ class MainWindow(QMainWindow):
             font = app.font()
             font.setPointSizeF(11.0 * self._ui_scale)
             app.setFont(font)
-            app.setStyleSheet(application_stylesheet(self._ui_scale))
+            app.setStyleSheet(
+                application_stylesheet(
+                    self._ui_scale,
+                    self._ui_theme,
+                    themes_path=self.settings_service.theme_path,
+                )
+            )
 
     def _build_ui(self) -> None:
         self.setWindowTitle(BASE_WINDOW_TITLE)
-        self.setStyleSheet(application_stylesheet(self._ui_scale))
+        self.setStyleSheet(
+            application_stylesheet(
+                self._ui_scale,
+                self._ui_theme,
+                themes_path=self.settings_service.theme_path,
+            )
+        )
         self.resize(1560, 960)
         self.setDockNestingEnabled(True)
 
@@ -191,7 +213,11 @@ class MainWindow(QMainWindow):
         self.tree.setDropIndicatorShown(True)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.setUniformRowHeights(True)
-        self.dataset_columns = ViewColumns(self.tree)
+        self.dataset_columns = ViewColumns(
+            self.tree,
+            default_widths={"图例/别名": 160},
+            minimum_widths={"图例/别名": 120},
+        )
         self.tree.doubleClicked.connect(self._on_tree_double_clicked)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
 
@@ -199,9 +225,9 @@ class MainWindow(QMainWindow):
         tree_layout = QVBoxLayout(tree_widget)
         tree_layout.setContentsMargins(4, 4, 4, 4)
         tree_layout.setSpacing(4)
-        hint = QLabel("勾选更新跟随图；拖动文件调整分组内顺序。“数据...”自定义当前图；右键文件设置面积/图例并快速绘图。")
+        hint = QLabel("勾选更新跟随图；拖动文件调整分组内顺序。“数据...”自定义当前图；右键文件设置面积/图例模板/别名并快速绘图。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #607d8b;")
+        apply_theme_role(hint, "hint")
         tree_layout.addWidget(hint)
         action_row = QHBoxLayout()
         select_all_btn = QPushButton("全选")
@@ -223,7 +249,7 @@ class MainWindow(QMainWindow):
         self.file_detail_label = QLabel("未选择文件")
         self.file_detail_label.setWordWrap(True)
         self.file_detail_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.file_detail_label.setStyleSheet("color: #546e7a;")
+        apply_theme_role(self.file_detail_label, "muted")
         self.file_detail_label.setMinimumHeight(54)
         self.dataset_splitter = QSplitter(Qt.Vertical)
         self.dataset_splitter.setChildrenCollapsible(False)
@@ -249,10 +275,7 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(3000)
         self.log_title = QLabel("日志")
-        self.log_title.setStyleSheet(
-            "background: #eef2f5; padding: 6px; "
-            "border-bottom: 1px solid #d9e0e6; font-weight: 600;"
-        )
+        apply_theme_role(self.log_title, "log-title")
         log_container = QWidget()
         log_layout = QVBoxLayout(log_container)
         log_layout.setContentsMargins(0, 0, 0, 0)
@@ -335,6 +358,9 @@ class MainWindow(QMainWindow):
         self.edit_legend_action = QAction("设置数据图例模板...", self)
         self.edit_legend_action.setToolTip("为选中数据设置默认图例模板，例如 {CV_Voltage}-{Cycle_Number}")
         self.edit_legend_action.triggered.connect(self._edit_legend_template_for_selection)
+        self.edit_alias_action = QAction("设置图例/别名...", self)
+        self.edit_alias_action.setToolTip("为单个数据设置图例显示名称；留空恢复自动规则")
+        self.edit_alias_action.triggered.connect(self._edit_legend_alias_for_selection)
         self.about_action = QAction("关于", self)
         self.about_action.triggered.connect(self.show_about)
 
@@ -426,6 +452,7 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(self.settings_action)
         tools_menu.addAction(self.preset_manager_action)
         tools_menu.addAction(self.edit_legend_action)
+        tools_menu.addAction(self.edit_alias_action)
 
         help_menu = menu.addMenu("帮助(&H)")
         help_menu.addAction(self.about_action)
@@ -622,7 +649,12 @@ class MainWindow(QMainWindow):
         cycles = dict(self.dataset_model.cycle_selection)
         for run in self.dataset.all_runs():
             visible.setdefault(run.run_id, True)
-        self.dataset_model.set_dataset(self.dataset, visible, cycles)
+        self.dataset_model.set_dataset(
+            self.dataset,
+            visible,
+            cycles,
+            text_values=self.settings_service.resolve_text_preset(),
+        )
         self.tree.expandAll()
         selected = self._selected_run_ids()
         visible_ids = self.dataset_model.visible_run_ids()
@@ -652,7 +684,12 @@ class MainWindow(QMainWindow):
         self.fits.clear()
         self.metrics.clear()
         self._close_all_tabs_silent()
-        self.dataset_model.set_dataset(self.dataset, {}, {})
+        self.dataset_model.set_dataset(
+            self.dataset,
+            {},
+            {},
+            text_values=self.settings_service.resolve_text_preset(),
+        )
         self.analysis_panel.update_dataset(self.dataset)
         self.results_panel.update_dataset(self.dataset)
         self._mark_dirty()
@@ -701,6 +738,7 @@ class MainWindow(QMainWindow):
         self._mark_dirty()
 
     def _on_dataset_order_changed(self) -> None:
+        self.dataset_model.refresh_auto_labels(self.settings_service.resolve_text_preset())
         ordered_ids = [run.run_id for run in self.dataset.all_runs()]
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
@@ -807,7 +845,18 @@ class MainWindow(QMainWindow):
             params.append(f"质量 {run.params.mass_mg:g} mg")
         if params:
             lines.append(" · ".join(params))
+        alias = run.legend_alias.strip()
+        decision = self.dataset_model._auto_labels.get(run.run_id)
+        if alias:
+            lines.append(f"图例别名: {alias}")
+        elif decision is not None and decision.auto:
+            lines.append(f"自动图例: {decision.label}")
         template = (run.legend_template or "").strip()
+        fallback_label = (
+            decision.label
+            if decision is not None and decision.auto
+            else run.legend_name
+        )
         if template:
             cycle = run.cycles[0] if isinstance(run, CVRun) and run.cycles else None
             label, unknown = preview_label(
@@ -816,18 +865,22 @@ class MainWindow(QMainWindow):
                 cycle=cycle,
                 cycle_number=cycle.index if cycle is not None else None,
                 file_number=dataset_file_numbers(self.dataset).get(run.run_id),
+                fallback=fallback_label,
             )
-            legend_text = f"图例: {label or run.legend_name}"
+            legend_text = f"图例: {label or fallback_label}"
             if unknown:
                 legend_text += "（未知字段: " + "、".join("{" + token + "}" for token in unknown) + "）"
             lines.append(legend_text)
         else:
-            default_text = (
-                "图例: 默认（文件名 / Cycle）"
-                if isinstance(run, CVRun)
-                else "图例: 默认（文件名）"
-            )
-            lines.append(default_text)
+            if decision is not None and decision.auto:
+                lines.append(f"图例: 自动（{fallback_label}）")
+            else:
+                default_text = (
+                    "图例: 默认（文件名 / Cycle）"
+                    if isinstance(run, CVRun)
+                    else "图例: 默认（文件名）"
+                )
+                lines.append(default_text)
         self.file_detail_label.setText("<br>".join(lines))
 
     def _on_tree_double_clicked(self, index: QModelIndex) -> None:
@@ -835,6 +888,12 @@ class MainWindow(QMainWindow):
         if node is None:
             return
         run = node.run
+        if index.column() == ALIAS_COLUMN and node.kind == "run" and run is not None:
+            self.tree.selectionModel().select(
+                index, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+            )
+            self._edit_legend_alias([run.run_id])
+            return
         if isinstance(run, CVRun):
             self.tree.selectionModel().select(
                 index, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
@@ -860,6 +919,8 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         params_action = menu.addAction("设置电极面积/质量...")
         legend_action = menu.addAction("设置数据图例模板...")
+        alias_action = menu.addAction("设置图例/别名...")
+        alias_action.setEnabled(len(run_ids) == 1)
         plot_action = menu.addAction("绘制 CV 叠加图")
         eis_action = menu.addAction("绘制 EIS Nyquist")
         cp_action = menu.addAction("绘制 CP / GCD 曲线")
@@ -874,6 +935,8 @@ class MainWindow(QMainWindow):
             selected = self._selected_run_ids()
             legend_ids = selected if set(run_ids).issubset(set(selected)) else run_ids
             self._edit_legend_template(legend_ids or run_ids)
+        elif action == alias_action:
+            self._edit_legend_alias(run_ids)
         elif action == plot_action:
             self._select_run_ids(run_ids)
             self._request_plot("cv_overlay", run_ids=run_ids)
@@ -961,11 +1024,58 @@ class MainWindow(QMainWindow):
             return
         self._edit_legend_template(run_ids)
 
+    def _edit_legend_alias_for_selection(self) -> None:
+        run_ids = self._selected_run_ids()
+        if not run_ids:
+            QMessageBox.information(
+                self,
+                "没有选择",
+                "请先在数据集树中选择一个要设置别名的数据",
+            )
+            return
+        self._edit_legend_alias(run_ids)
+
+    def _edit_legend_alias(self, run_ids: list[str]) -> None:
+        runs = [run for run in self.dataset.all_runs() if run.run_id in set(run_ids)]
+        if len(runs) != 1:
+            QMessageBox.information(self, "请选择一个数据", "图例/别名只能为单个数据设置")
+            return
+        run = runs[0]
+        file_numbers = dataset_file_numbers(self.dataset)
+        resolved = resolve_legend_labels(
+            self.dataset.all_runs(),
+            file_numbers=file_numbers,
+            text_values=self.settings_service.resolve_text_preset(),
+        ).get(run.run_id)
+        auto_label = resolved.label if resolved is not None and resolved.auto else ""
+        dialog = LegendAliasDialog(
+            run,
+            parent=self,
+            default_label=default_filename_label(run),
+            auto_label=auto_label,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        run.legend_alias = dialog.alias()
+        self.dataset_model.refresh_auto_labels(self.settings_service.resolve_text_preset())
+        self._update_file_details(self._selected_run_ids())
+        self._redraw_all_tabs()
+        self._mark_dirty()
+        self.statusBar().showMessage(
+            "图例别名已更新" if run.legend_alias else "图例别名已清除，恢复自动规则"
+        )
+
     def _edit_legend_template(self, run_ids: list[str]) -> None:
         runs = [run for run in self.dataset.all_runs() if run.run_id in set(run_ids)]
         if not runs:
             return
-        dialog = LegendTemplateDialog(runs, parent=self, file_numbers=dataset_file_numbers(self.dataset))
+        dialog = LegendTemplateDialog(
+            runs,
+            parent=self,
+            file_numbers=dataset_file_numbers(self.dataset),
+        )
+        if hasattr(dialog, "set_context_runs"):
+            dialog.set_context_runs(self.dataset.all_runs())
         if dialog.exec() != QDialog.Accepted:
             return
         template = dialog.template()
@@ -992,7 +1102,13 @@ class MainWindow(QMainWindow):
     def _edit_plot_data(self, tab: PlotTab) -> None:
         if not isinstance(tab, PlotTab):
             return
-        dialog = PlotDataDialog(self.dataset, tab.spec, tab.spec.kind, parent=self)
+        dialog = PlotDataDialog(
+            self.dataset,
+            tab.spec,
+            tab.spec.kind,
+            parent=self,
+            text_values=self.settings_service.resolve_text_preset(),
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         run_ids = dialog.selected_run_ids()
@@ -1638,6 +1754,7 @@ class MainWindow(QMainWindow):
 
     def _apply_text_preset_to_all(self) -> None:
         values = self.settings_service.resolve_text_preset()
+        self.dataset_model.refresh_auto_labels(values)
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             if isinstance(tab, PlotTab):
@@ -1648,7 +1765,11 @@ class MainWindow(QMainWindow):
     # Settings / project / export
     # ------------------------------------------------------------------
     def open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings_service.settings, self)
+        dialog = SettingsDialog(
+            self.settings_service.settings,
+            self,
+            themes=self.settings_service.available_themes(),
+        )
         if dialog.exec() == QDialog.Accepted:
             values = dialog.values()
             self._project_analysis = None
@@ -1669,8 +1790,24 @@ class MainWindow(QMainWindow):
                 **values.get("ui", {}),
             }
             self._ui_scale = _safe_ui_scale(self.settings_service.ui_state.get("scale", 1.0))
+            self._ui_theme = normalize_theme(
+                self.settings_service.ui_state.get("theme", "default"),
+                self.settings_service.theme_ids(),
+            )
             self._apply_ui_scale()
-            self.setStyleSheet(application_stylesheet(self._ui_scale))
+            self.setStyleSheet(
+                application_stylesheet(
+                    self._ui_scale,
+                    self._ui_theme,
+                    themes_path=self.settings_service.theme_path,
+                )
+            )
+            self.tree.viewport().update()
+            self.results_panel.update_dataset(
+                self.dataset,
+                selected_run_ids=self._selected_run_ids(),
+                visible_run_ids=self.dataset_model.visible_run_ids(),
+            )
             self.settings_service.save()
             self.analysis_panel.set_options(
                 {
@@ -1797,7 +1934,12 @@ class MainWindow(QMainWindow):
             self.fits = {}
             self.metrics = {}
             self._project_analysis = None
-            self.dataset_model.set_dataset(self.dataset, {}, {})
+            self.dataset_model.set_dataset(
+                self.dataset,
+                {},
+                {},
+                text_values=self.settings_service.resolve_text_preset(),
+            )
             defaults = {
                 "normalization": self.active_analysis.get("default_normalization", "none"),
                 "fit_model": self.settings_service.eis.get("fit_model", "auto"),
@@ -1856,7 +1998,12 @@ class MainWindow(QMainWindow):
                     run.summary = metrics_from_fit(run, self.fits[run.run_id], run.summary)
                     self.metrics[run.run_id] = run.summary
             self._close_all_tabs_silent()
-            self.dataset_model.set_dataset(self.dataset, state.visible_runs, state.cycle_selection)
+            self.dataset_model.set_dataset(
+                self.dataset,
+                state.visible_runs,
+                state.cycle_selection,
+                text_values=self.settings_service.resolve_text_preset(),
+            )
             self.tree.expandAll()
             for spec in state.plots:
                 if spec.preset in state.styles:

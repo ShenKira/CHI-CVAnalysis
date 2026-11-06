@@ -38,6 +38,7 @@ from cvanalysis.plotting.export import (
 from cvanalysis.plotting.presets import preset_label, preset_names
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, canvas_size_for_ratio
+from cvanalysis.ui.theme import apply_theme_role, theme_color
 from cvanalysis.plotting.paper import paper_overrides
 
 
@@ -148,7 +149,7 @@ class PlotTab(QWidget):
 
         header = QHBoxLayout()
         self.title_label = QLabel(self.spec.title or self.spec.label)
-        self.title_label.setStyleSheet("font-weight: 600; color: #263238;")
+        apply_theme_role(self.title_label, "title")
         header.addWidget(self.title_label)
         header.addStretch()
         options_btn = QPushButton("分析 / 论文选项")
@@ -201,7 +202,7 @@ class PlotTab(QWidget):
         layout.addWidget(self.canvas_host, stretch=1)
 
         self.warning_label = QLabel("")
-        self.warning_label.setStyleSheet("color: #a33;")
+        apply_theme_role(self.warning_label, "error")
         self.warning_label.setWordWrap(True)
         layout.addWidget(self.warning_label)
 
@@ -415,7 +416,7 @@ class PlotTab(QWidget):
                 transform=ax.transAxes,
                 ha="center",
                 va="center",
-                color="#a33",
+                color=theme_color("error"),
                 fontsize=max(9, self.style.font_size),
                 fontfamily=["Microsoft YaHei", "SimHei", "DejaVu Sans"],
                 wrap=True,

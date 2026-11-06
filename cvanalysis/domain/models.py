@@ -190,6 +190,7 @@ class CVRun:
     cycles: list[CVCycle] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     legend_template: str = ""
+    legend_alias: str = ""
     parser_id: str = "chi_cv"
     parser_version: int = 1
     summary: Any = field(default=None, repr=False, compare=False)
@@ -216,6 +217,9 @@ class CVRun:
 
     @property
     def legend_name(self) -> str:
+        alias = self.legend_alias.strip()
+        if alias:
+            return alias
         return abbreviate_name(self.display_name, 26)
 
     def add_warning(self, message: str) -> None:
@@ -246,6 +250,7 @@ class CPRun:
     params: ElectrodeParams = field(default_factory=ElectrodeParams)
     warnings: list[str] = field(default_factory=list)
     legend_template: str = ""
+    legend_alias: str = ""
     parser_id: str = "chi_cp"
     parser_version: int = 1
     summary: Any = field(default=None, repr=False, compare=False)
@@ -260,6 +265,9 @@ class CPRun:
 
     @property
     def legend_name(self) -> str:
+        alias = self.legend_alias.strip()
+        if alias:
+            return alias
         return abbreviate_name(self.display_name, 26)
 
     @property
@@ -306,6 +314,7 @@ class EISRun:
     params: ElectrodeParams = field(default_factory=ElectrodeParams)
     warnings: list[str] = field(default_factory=list)
     legend_template: str = ""
+    legend_alias: str = ""
     parser_id: str = "chi_eis"
     parser_version: int = 1
     summary: Any = field(default=None, repr=False, compare=False)
@@ -320,6 +329,9 @@ class EISRun:
 
     @property
     def legend_name(self) -> str:
+        alias = self.legend_alias.strip()
+        if alias:
+            return alias
         return abbreviate_name(self.display_name, 26)
 
     @property

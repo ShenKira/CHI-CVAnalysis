@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import os
+import threading
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
@@ -254,6 +255,30 @@ def test_closing_project_does_not_redraw_hidden_dirty_tabs(
     assert calls == []
     window.close()
     app.processEvents()
+
+
+def test_background_task_keeps_ui_alive_and_close_waits(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(settings_path=tmp_path / "config.json")
+    window.show()
+    gate = threading.Event()
+    applied = []
+    window._run_task(lambda: gate.wait(3), applied.append)
+    ticks = []
+    QTimer.singleShot(0, lambda: ticks.append(True))
+    app.processEvents()
+    assert ticks
+    window.close()
+    assert window.isVisible()
+    gate.set()
+    for _ in range(200):
+        QTest.qWait(10)
+        app.processEvents()
+        if not window._tasks:
+            break
+    assert not window._tasks
+    assert not window.isVisible()
+    assert not applied
 
 
 def test_ctrl_shift_w_closes_project_without_closing_window(tmp_path, synthetic_cv_runs):

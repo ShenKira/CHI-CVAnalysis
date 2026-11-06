@@ -84,19 +84,36 @@ def _legend_bbox_in_figure(figure, legend):
 def _unique_legend_items(axes):
     handles: list = []
     labels: list[str] = []
-    seen: set[str] = set()
+    seen_handles: set[int] = set()
     for ax in axes:
         axis_handles, axis_labels = ax.get_legend_handles_labels()
         for handle, label in zip(axis_handles, axis_labels):
-            if not label or label.startswith("_") or label in seen:
+            if not label or label.startswith("_"):
                 continue
-            seen.add(label)
+            # Deduplicate by handle identity, never by label text.  Two runs
+            # can legitimately resolve to the same short label; dropping one
+            # of them would silently remove a plotted series from the legend.
+            key = id(handle)
+            if key in seen_handles:
+                continue
+            seen_handles.add(key)
             handles.append(handle)
             labels.append(label)
     return handles, labels
 
 
-def _make_legend(figure, handles, labels, style, *, ncols, axis=None, loc="best", anchor=None):
+def _make_legend(
+    figure,
+    handles,
+    labels,
+    style,
+    *,
+    ncols,
+    axis=None,
+    loc="best",
+    anchor=None,
+    bbox_transform=None,
+):
     common = dict(
         fontsize=style.legend_size,
         frameon=False,
@@ -109,7 +126,12 @@ def _make_legend(figure, handles, labels, style, *, ncols, axis=None, loc="best"
         borderaxespad=0.0,
     )
     if axis is not None:
-        legend = axis.legend(handles, labels, loc=loc, **common)
+        kwargs = {}
+        if anchor is not None:
+            kwargs["bbox_to_anchor"] = anchor
+        if bbox_transform is not None:
+            kwargs["bbox_transform"] = bbox_transform
+        legend = axis.legend(handles, labels, loc=loc, **kwargs, **common)
     else:
         legend = figure.legend(
             handles,
@@ -144,7 +166,8 @@ def _legend_column_key(figure, labels, style, *, axis, loc, anchor, usable_width
 
 
 def _choose_columns(figure, handles, labels, style, requested, *, axis=None, loc="best", anchor=None,
-                    usable_width_fraction: float = 0.92):
+                    usable_width_fraction: float = 0.92,
+                    usable_height_fraction: float = 0.46):
     if not labels:
         return 1
     if requested != "auto":
@@ -159,6 +182,7 @@ def _choose_columns(figure, handles, labels, style, requested, *, axis=None, loc
         anchor=anchor,
         usable_width_fraction=usable_width_fraction,
     )
+    key = (*key, round(float(usable_height_fraction), 6))
     cache = getattr(figure, "_paper_legend_column_cache", None)
     if cache is None:
         cache = {}
@@ -167,7 +191,9 @@ def _choose_columns(figure, handles, labels, style, requested, *, axis=None, loc
         return cache[key]
 
     container_width = axis.bbox.width if axis is not None else figure.bbox.width
+    container_height = axis.bbox.height if axis is not None else figure.bbox.height
     max_columns = min(len(labels), MAX_PAPER_LEGEND_COLUMNS)
+    width_fallback = 0
     for ncols in range(max_columns, 0, -1):
         legend = _make_legend(
             figure,
@@ -181,9 +207,22 @@ def _choose_columns(figure, handles, labels, style, requested, *, axis=None, loc
         )
         bbox = _legend_bbox_in_figure(figure, legend)
         legend.remove()
-        if container_width > 0 and bbox.width * figure.bbox.width <= container_width * usable_width_fraction:
+        width_ok = (
+            container_width <= 0
+            or bbox.width * figure.bbox.width <= container_width * usable_width_fraction
+        )
+        height_ok = (
+            container_height <= 0
+            or bbox.height * figure.bbox.height <= container_height * usable_height_fraction
+        )
+        if width_ok and height_ok:
             cache[key] = ncols
             return ncols
+        if width_ok and not width_fallback:
+            width_fallback = ncols
+    if width_fallback:
+        cache[key] = width_fallback
+        return width_fallback
     cache[key] = 1
     return 1
 
@@ -211,6 +250,11 @@ def _rebuild_inside_legends(figure, spec, style, requested_columns):
         if old is None:
             continue
         handles, labels = ax.get_legend_handles_labels()
+        if old.legend_handles and old.get_texts():
+            # CP capacity can put ax2 efficiency handles into ax's legend.
+            # Recollecting only from ax would silently drop those entries.
+            handles = list(old.legend_handles)
+            labels = [text.get_text() for text in old.get_texts()]
         old.remove()
         if not labels:
             continue
@@ -283,7 +327,8 @@ def _finish_outside(figure, handles, labels, style, requested_columns, spec):
         requested_columns,
         loc=loc,
         anchor=anchor,
-        usable_width_fraction=usable_width,
+        usable_width_fraction=min(0.98, usable_width + 0.06),
+        usable_height_fraction=0.34,
     )
     legend = _make_legend(
         figure,
@@ -366,3 +411,226 @@ def finish_paper(figure, spec, style):
         if legend is not None:
             legend.remove()
     _finish_outside(figure, handles, labels, style, requested_columns, spec)
+
+
+def _legend_inside_axes(bbox, axes_position, *, width_fraction=0.94, height_fraction=0.40) -> bool:
+    return (
+        bbox.x0 >= axes_position.x0 - 0.015
+        and bbox.x1 <= axes_position.x1 + 0.015
+        and bbox.y0 >= axes_position.y0 - 0.015
+        and bbox.y1 <= axes_position.y1 + 0.015
+        and bbox.width <= axes_position.width * width_fraction
+        and bbox.height <= axes_position.height * height_fraction
+    )
+
+
+def _place_external_legend(
+    figure,
+    ax,
+    handles,
+    labels,
+    style,
+    ncols,
+    axes_position,
+):
+    legend = _make_legend(
+        figure,
+        handles,
+        labels,
+        style,
+        ncols=ncols,
+        axis=ax,
+        loc="lower center",
+        anchor=(0.5, 0.01),
+        bbox_transform=figure.transFigure,
+    )
+    bbox = _legend_bbox_in_figure(figure, legend)
+    # Leave room for the x-axis label between the axes and the external
+    # legend; otherwise the label is hidden behind the legend even though the
+    # legend itself is inside the canvas.
+    label_gap = max(
+        0.10,
+        float(style.effective_xlabel_size() + style.tick_size + 8.0)
+        / max(1.0, figure.get_figheight() * 72.0)
+        + 0.02,
+    )
+    bottom = min(0.72, max(0.18, bbox.y1 + label_gap))
+    bottom = min(bottom, max(0.08, axes_position.y1 - 0.22))
+    # Tight layout may already have squeezed the axes horizontally to make
+    # room for the over-wide legend.  Moving the legend outside lets us
+    # restore a normal plotting width instead of keeping that squeeze.
+    left = max(0.08, min(axes_position.x0, 0.20))
+    right = max(axes_position.x1, 0.96)
+    top = max(axes_position.y1, 0.94)
+    figure.subplots_adjust(
+        left=left,
+        right=right,
+        bottom=bottom,
+        top=min(0.98, top),
+    )
+    return legend
+
+
+def _standard_legend_cache_key(figure, ax, labels, style):
+    return (
+        tuple(str(label) for label in labels),
+        round(float(figure.get_figwidth()), 6),
+        round(float(figure.get_figheight()), 6),
+        round(float(figure.dpi), 4),
+        # Tight layout can shift the axes by a fraction of a percent between
+        # redraws; a coarse position key keeps the cache useful without
+        # ignoring genuine size changes.
+        tuple(round(float(value), 1) for value in ax.get_position().bounds),
+        round(float(style.legend_size), 5),
+        int(style.legend_columns or 1),
+        str(style.legend_location),
+        bool(style.legend_frame),
+        bool(style.legend_shadow),
+        tuple(style.text_font_family()),
+    )
+
+
+def fit_standard_legends(figure, spec, style):
+    """Keep ordinary (non-paper) legends inside the canvas.
+
+    Renderers create legends before the final layout pass.  A long multi-run
+    legend can therefore be wider than the axes and get clipped by the PNG
+    canvas.  Rebuild each single-axis legend with a measured column count and,
+    when necessary, move it below the axes with an explicitly reserved bottom
+    margin.  Multi-axes figures keep their renderer placement but still get the
+    best column count that fits the canvas.
+    """
+    if not style.legend or not getattr(spec, "show_legend", True):
+        return
+    if not figure.axes:
+        return
+    if getattr(style, "constrained_layout", False):
+        # subplots_adjust is ignored by the constrained layout engine; leave
+        # the renderer's legend placement intact rather than creating an
+        # overlapping external legend.
+        return
+    visible_axes = [
+        ax
+        for ax in figure.axes
+        if getattr(ax, "axison", True) and ax.get_visible()
+    ]
+    if len(visible_axes) != 1:
+        # Bode/fit/twin-axis layouts deliberately reserve their own legend
+        # lanes.  Rebuilding them from a single axes would lose ax2 entries
+        # and move intentionally external legends inside the plot.
+        return
+    for ax in list(figure.axes):
+        legend = ax.get_legend()
+        if legend is None:
+            continue
+        handles, labels = ax.get_legend_handles_labels()
+        if legend.legend_handles and legend.get_texts():
+            handles = list(legend.legend_handles)
+            labels = [text.get_text() for text in legend.get_texts()]
+        if not handles or not labels:
+            legend.remove()
+            continue
+        if len(labels) > 40:
+            # Extremely large legends (e.g. legend_cycle_limit=0 with many
+            # cycles) are intentionally left to the renderer; fitting them
+            # would require many full figure draws and still not fit.
+            continue
+        axes_position = ax.get_position()
+        cache_key = _standard_legend_cache_key(figure, ax, labels, style)
+        cache = getattr(figure, "_standard_legend_cache", None)
+        if cache is None:
+            cache = {}
+            figure._standard_legend_cache = cache
+        if len(cache) > 16:
+            cache.clear()
+        cached = cache.get(cache_key)
+        legend.remove()
+        if cached is not None:
+            placement, ncols = cached
+            if placement == "inside":
+                _make_legend(
+                    figure,
+                    handles,
+                    labels,
+                    style,
+                    ncols=ncols,
+                    axis=ax,
+                    loc=style.legend_location,
+                )
+            else:
+                _place_external_legend(
+                    figure,
+                    ax,
+                    handles,
+                    labels,
+                    style,
+                    ncols,
+                    axes_position,
+                )
+            continue
+
+        desired_columns = max(1, int(style.legend_columns or 1))
+        max_columns = min(
+            len(labels),
+            max(desired_columns, int(math.ceil(math.sqrt(len(labels))))),
+            5,
+        )
+        chosen_ncols = 0
+        for ncols in range(max_columns, 0, -1):
+            candidate = _make_legend(
+                figure,
+                handles,
+                labels,
+                style,
+                ncols=ncols,
+                axis=ax,
+                loc=style.legend_location,
+            )
+            bbox = _legend_bbox_in_figure(figure, candidate)
+            if _legend_inside_axes(bbox, axes_position):
+                chosen_ncols = ncols
+                break
+            candidate.remove()
+        if chosen_ncols:
+            cache[cache_key] = ("inside", chosen_ncols)
+            continue
+
+        outside_ncols = 0
+        outer_columns = min(len(labels), 3)
+        for ncols in range(outer_columns, 0, -1):
+            candidate = _make_legend(
+                figure,
+                handles,
+                labels,
+                style,
+                ncols=ncols,
+                axis=ax,
+                loc="lower center",
+                anchor=(0.5, 0.01),
+                bbox_transform=figure.transFigure,
+            )
+            bbox = _legend_bbox_in_figure(figure, candidate)
+            if (
+                bbox.width <= 0.94
+                and bbox.height <= 0.32
+                and bbox.x0 >= -0.01
+                and bbox.x1 <= 1.01
+            ):
+                outside_ncols = ncols
+                break
+            candidate.remove()
+        if not outside_ncols:
+            outside_ncols = 1
+        _place_external_legend(
+            figure,
+            ax,
+            handles,
+            labels,
+            style,
+            outside_ncols,
+            axes_position,
+        )
+        cache[cache_key] = ("outside", outside_ncols)
+        if len(cache) > 8:
+            cache.clear()
+            cache[cache_key] = ("outside", outside_ncols)

@@ -81,3 +81,21 @@ def test_partial_import_reports_failed_file_and_keeps_others(tmp_path):
     assert len(window.dataset.eis_runs) == 1
     window.close()
     app.processEvents()
+
+
+def test_frequency_errors_are_visible_and_not_unrestricted():
+    from cvanalysis.ui.widgets.analysis_panel import AnalysisPanel
+
+    app = QApplication.instance() or QApplication([])
+    panel = AnalysisPanel()
+    for text in ("abc", "nan", "inf", "0", "-1"):
+        panel.freq_low_edit.setText(text)
+        assert not panel.validate_frequency()
+        assert panel.frequency_error.text()
+    panel.freq_low_edit.setText("10")
+    panel.freq_high_edit.setText("1")
+    assert not panel.validate_frequency()
+    panel.freq_high_edit.setText("1e6")
+    assert panel.validate_frequency()
+    panel.deleteLater()
+    app.processEvents()

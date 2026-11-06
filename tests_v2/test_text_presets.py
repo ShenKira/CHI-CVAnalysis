@@ -41,9 +41,13 @@ def test_text_catalog_defaults_are_valid_and_keep_special_notation():
 
 
 def test_text_font_family_has_symbol_and_cjk_fallbacks():
-    families = BUILTIN_PRESETS["ieee-single"].text_font_family()
-    assert families[0] == "Arial"
-    assert "DejaVu Sans" in families
+    for name in ("ieee-single", "ieee-double", "thesis"):
+        style = BUILTIN_PRESETS[name]
+        families = style.text_font_family()
+        assert style.font_family[0] == "Arial"
+        assert families[0] == "Arial"
+        assert "DejaVu Sans" in families
+        assert style.rc()["font.family"] == list(style.font_family)
 
 
 def test_axis_text_precedence_and_blank_semantics():

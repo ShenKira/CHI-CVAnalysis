@@ -19,6 +19,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from cvanalysis.appearance import (
+    DEFAULT_THEME_ID,
+    ensure_theme_file,
+    load_themes,
+    normalize_theme,
+    theme_path_for_config,
+)
 from cvanalysis.plotting.presets import DEFAULT_PRESET_NAME, BUILTIN_PRESETS, preset_names, resolve_preset
 from cvanalysis.plotting.style import DEFAULT_COLOR_CYCLE, PlotStyle
 from cvanalysis.plotting.texts import (
@@ -88,6 +95,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "window_state": None,
         "last_plot_preset": DEFAULT_PRESET_NAME,
         "scale": 1.0,
+        "theme": DEFAULT_THEME_ID,
         "dataset_splitter": None,
         "analysis_splitter": None,
         "column_widths": {},
@@ -297,11 +305,23 @@ def legacy_mirror(style: PlotStyle, color_config: dict | None = None) -> dict[st
 class SettingsService:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else default_config_path()
+        self.theme_path = theme_path_for_config(self.path)
+        self.theme_created = False
         self.raw: dict[str, Any] = {}
         self.settings: dict[str, Any] = {}
         self.migrated_from_v1 = False
         self.load_warnings: list[str] = []
+        try:
+            self.theme_created = ensure_theme_file(self.theme_path)
+        except OSError as exc:
+            self.load_warnings.append(f"无法创建主题配置文件，将使用内置默认主题: {exc}")
         self.load()
+
+    def available_themes(self):
+        return load_themes(self.theme_path)
+
+    def theme_ids(self) -> list[str]:
+        return [theme.id for theme in self.available_themes()]
 
     # -- persistence -----------------------------------------------------
     def load(self) -> None:
@@ -450,6 +470,7 @@ class SettingsService:
 
         ui = settings["ui"]
         ui["scale"] = _as_float(ui.get("scale"), 1.0, minimum=0.8, maximum=1.6)
+        ui["theme"] = normalize_theme(ui.get("theme"), self.theme_ids())
         for key in ("geometry", "window_state"):
             if ui.get(key) is not None and not isinstance(ui.get(key), str):
                 ui[key] = None

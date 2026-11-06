@@ -14,6 +14,77 @@ def _paper_style(layout):
     return base.with_overrides(paper_overrides(layout, base))
 
 
+def test_paper_font_compensation_matrix():
+    style = BUILTIN_PRESETS["daily"].with_overrides(
+        {"figure_size": (160 / 25.4, 3.2)}
+    )
+    full = dict(enabled=True, text_width_mm=160, fraction=1, body_pt=10)
+    baseline = paper_overrides(full, style)
+    half = paper_overrides({**full, "fraction": .5}, style)
+    quarter = paper_overrides({**full, "fraction": .25}, style)
+    assert baseline["title_size"] == pytest.approx(10)
+    assert half["title_size"] == pytest.approx(20)
+    assert quarter["title_size"] == pytest.approx(32)
+    assert half["annotation_size"] * .5 == pytest.approx(7.5)
+    assert quarter["annotation_size"] * .25 == pytest.approx(6.0)
+    custom = paper_overrides({**full, "fraction": .5, "body_pt": 12}, style)
+    assert custom["annotation_size"] * .5 == pytest.approx(9)
+    assert custom["xlabel_size"] * .5 == pytest.approx(10.8)
+
+    base_layout = dict(enabled=True, text_width_mm=160, body_pt=10)
+    below = paper_overrides({**base_layout, "fraction": .329}, style)
+    at_boundary = paper_overrides({**base_layout, "fraction": .33}, style)
+    below_scale = 160 * .329 / (style.figure_size[0] * 25.4)
+    boundary_scale = 160 * .33 / (style.figure_size[0] * 25.4)
+    assert below["title_size"] * below_scale == pytest.approx(8.0)
+    assert below["xlabel_size"] * below_scale == pytest.approx(7.2)
+    assert at_boundary["title_size"] * boundary_scale == pytest.approx(10.0)
+    assert at_boundary["xlabel_size"] * boundary_scale == pytest.approx(9.0)
+
+
+def test_paper_export_dimensions_and_final_fonts(synthetic_cv_runs, tmp_path):
+    from io import BytesIO
+
+    from PIL import Image
+
+    from cvanalysis.domain.models import Dataset
+    from cvanalysis.plotting.export import export_figure, render_to_new_figure
+
+    style = BUILTIN_PRESETS["daily"]
+    layout = dict(enabled=True, fraction=.5, text_width_mm=160, body_pt=10)
+    overrides = paper_overrides(layout, style)
+    scale = 160 * .5 / (style.figure_size[0] * 25.4)
+    assert overrides["annotation_size"] * scale == pytest.approx(7.5)
+    assert overrides["tick_size"] * scale == pytest.approx(8)
+    spec = PlotSpec(
+        "cv_cap_scan",
+        [r.run_id for r in synthetic_cv_runs],
+        paper_layout=layout,
+    )
+    figure = render_to_new_figure(Dataset(cv_runs=synthetic_cv_runs), spec, style)
+    assert tuple(figure.get_size_inches()) == pytest.approx(style.figure_size)
+    assert figure.axes[0].xaxis.label.get_fontsize() * scale == pytest.approx(9)
+    assert paper_overrides(layout, style.with_overrides(overrides)) == overrides
+    assert not overrides["save_bbox_inches"]
+    output = BytesIO()
+    figure.savefig(output, format="png", dpi=300)
+    output.seek(0)
+    with Image.open(output) as exported:
+        assert exported.size == (
+            round(style.figure_size[0] * 300),
+            round(style.figure_size[1] * 300),
+        )
+    path = tmp_path / "paper.png"
+    export_figure(figure, path, style)
+    with Image.open(path) as exported:
+        assert exported.size == (
+            round(style.figure_size[0] * style.save_dpi),
+            round(style.figure_size[1] * style.save_dpi),
+        )
+    with pytest.raises(ValueError):
+        paper_overrides({**layout, "fraction": 0}, style)
+
+
 @pytest.mark.parametrize(
     ("fraction", "expected"),
     [(.49, "outside"), (.5, "inside"), (.51, "inside")],

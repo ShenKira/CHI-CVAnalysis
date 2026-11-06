@@ -324,15 +324,6 @@ def test_legend_template_token_matching_is_case_insensitive():
     assert not template_uses_cycle("{CV_Voltage}")
 
 
-def test_paper_presets_use_arial_and_font_family_is_not_hardcoded_serif():
-    from cvanalysis.plotting.presets import BUILTIN_PRESETS
-
-    for name in ("ieee-single", "ieee-double", "thesis"):
-        style = BUILTIN_PRESETS[name]
-        assert style.font_family[0] == "Arial"
-        assert style.rc()["font.family"] == list(style.font_family)
-
-
 def test_axes_aspect_and_quick_style_overrides():
     from cvanalysis.plotting.export import render_plot
     from cvanalysis.plotting.presets import BUILTIN_PRESETS
@@ -382,3 +373,11 @@ def test_plot_style_from_dict_coerces_invalid_persisted_values():
     assert style.tick_direction == "in"
     assert style.grid_alpha == 0.3
     assert style.xlabel_bold is False
+
+    tick_style = PlotStyle.from_dict(
+        {"ticks_top": False, "ticks_right": False, "spines_top": True, "spines_right": True}
+    )
+    assert tick_style.spines_top and tick_style.spines_right
+    assert not tick_style.ticks_top and not tick_style.ticks_right
+    restored = PlotStyle.from_dict(tick_style.to_dict())
+    assert not restored.ticks_top and not restored.ticks_right

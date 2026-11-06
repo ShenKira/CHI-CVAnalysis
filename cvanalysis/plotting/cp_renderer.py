@@ -13,7 +13,13 @@ from cvanalysis.analysis.cp import CPRunSummary, analyze_cp_run, completed_cp_se
 from cvanalysis.domain.models import CPRun, Dataset
 from cvanalysis.domain.units import CURRENT, resolve_unit
 from cvanalysis.plotting.colors import resolve_color_cycle
-from cvanalysis.plotting.legend import dataset_file_numbers, effective_template, preview_label
+from cvanalysis.plotting.legend import (
+    dataset_file_numbers,
+    dataset_runs,
+    effective_template,
+    preview_label,
+    resolve_legend_labels,
+)
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
 from cvanalysis.plotting.texts import axis_text, plot_text
@@ -146,23 +152,30 @@ def _legend_label(
     file_number: int | None,
     warnings: list[str],
     include_current: bool = True,
+    default_label: str | None = None,
+    manual_alias: bool = False,
 ) -> str:
+    fallback = default_label or run.legend_name
     template = effective_template(run, spec)
+    alias_used = False
     if template:
         label, unknown = preview_label(
             run,
             template,
             file_number=file_number,
-            fallback=run.legend_name,
+            fallback=fallback,
         )
         for token in unknown:
             message = f"图例模板包含未知字段: {{{token}}}"
             if message not in warnings:
                 warnings.append(message)
     else:
-        label = run.legend_name
+        label = fallback
+        alias_used = manual_alias or (
+            default_label is None and bool(run.legend_alias.strip())
+        )
     current = run.applied_current_A
-    if include_current and current is not None:
+    if include_current and current is not None and not alias_used:
         label = plot_text(
             spec,
             "legend.cp_current_suffix",
@@ -196,6 +209,9 @@ def draw_gcd_curve(
     ax = figure.add_subplot(111)
     colors = resolve_color_cycle(style, len(runs), color_config)
     file_numbers = dataset_file_numbers(dataset)
+    resolved_labels = resolve_legend_labels(
+        dataset_runs(dataset), spec=spec, file_numbers=file_numbers
+    )
     handles: list[str] = []
     for index, run in enumerate(runs):
         summary = _summary(run)
@@ -208,12 +224,17 @@ def draw_gcd_curve(
         )
         _append_warnings(warnings, series.warnings)
         show_annotation = len(runs) == 1 and style.annotation and spec.annotations
+        resolved = resolved_labels.get(run.run_id)
         label = _legend_label(
             run,
             spec,
             file_number=file_numbers.get(run.run_id),
             warnings=warnings,
             include_current=not show_annotation,
+            default_label=resolved.label if resolved is not None else None,
+            manual_alias=bool(
+                resolved.manual if resolved is not None else run.legend_alias.strip()
+            ),
         )
         color = colors[index % len(colors)]
         ax.plot(
@@ -353,6 +374,10 @@ def draw_cp_capacity(
     ax = figure.add_subplot(111)
     ax2 = ax.twinx() if show_efficiency else None
     colors = resolve_color_cycle(style, len(runs), color_config)
+    file_numbers = dataset_file_numbers(dataset)
+    resolved_labels = resolve_legend_labels(
+        dataset_runs(dataset), spec=spec, file_numbers=file_numbers
+    )
     handles = []
     labels = []
     unit = "mAh"
@@ -422,7 +447,8 @@ def draw_cp_capacity(
                     / 3.6
                 )
         x = [cycle.index for cycle in cycles]
-        label = run.legend_name
+        resolved = resolved_labels.get(run.run_id)
+        label = resolved.label if resolved is not None else run.legend_name
         discharge_label = plot_text(spec, "legend.cp_discharge", label=label)
         charge_label = plot_text(spec, "legend.cp_charge", label=label)
         line = ax.plot(

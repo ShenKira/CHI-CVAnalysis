@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from cvanalysis.plotting.style import PlotStyle, canvas_size_for_ratio
+from cvanalysis.ui.theme import apply_theme_role
 
 
 ASPECT_RATIOS = {
@@ -54,7 +55,7 @@ class QuickStyleDialog(QDialog):
             "“应用”只修改当前图；“保存到配置”会先应用，再询问覆盖当前预设或另存为新预设。"
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #546e7a;")
+        apply_theme_role(hint, "muted")
         layout.addWidget(hint)
 
         ratio_group = QGroupBox("版式与比例")

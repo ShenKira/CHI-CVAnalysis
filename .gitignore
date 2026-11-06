@@ -58,6 +58,7 @@ Thumbs.db
 
 # Local runtime configuration may contain machine paths or user settings.
 /config.json
+/themes.json
 
 # Local environment / secret files
 .env
@@ -93,3 +94,7 @@ env/
 
 # Local release notes draft (copy into GitHub Release)
 /update_detailed.md
+
+# Local reference images / agent caches
+/KON!/
+.opencode_cache/

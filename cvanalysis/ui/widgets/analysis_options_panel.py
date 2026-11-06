@@ -22,6 +22,7 @@ from cvanalysis.plotting.axis_limits import (
 )
 from cvanalysis.plotting.legend import DEFAULT_CYCLE_LEGEND_LIMIT
 from cvanalysis.plotting.paper import paper_legend_settings, paper_overrides
+from cvanalysis.ui.theme import apply_theme_role
 
 
 class AnalysisOptionsPanel(QWidget):
@@ -51,7 +52,7 @@ class AnalysisOptionsPanel(QWidget):
         )
         self.axis_hint.setWordWrap(True)
         self.axis_hint.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        self.axis_hint.setStyleSheet("color: #607d8b;")
+        apply_theme_role(self.axis_hint, "hint")
         axis_outer.addWidget(self.axis_hint)
         self.unit_host = QWidget()
         self.unit_form = QFormLayout(self.unit_host)
@@ -88,7 +89,7 @@ class AnalysisOptionsPanel(QWidget):
         self.unified_interval_edit.setMaximumWidth(120)
         interval_row.addWidget(self.unified_interval_edit)
         self.unified_interval_unit_label = QLabel("")
-        self.unified_interval_unit_label.setStyleSheet("color: #607d8b;")
+        apply_theme_role(self.unified_interval_unit_label, "hint")
         interval_row.addWidget(self.unified_interval_unit_label)
         interval_row.addStretch(1)
         axis_outer.addWidget(self.unified_interval_host)
@@ -145,7 +146,7 @@ class AnalysisOptionsPanel(QWidget):
         self.pages.addTab(self.scroll_page(paper), "论文尺寸与字号")
         self.error = QLabel()
         self.error.setWordWrap(True)
-        self.error.setStyleSheet("color: #a33")
+        apply_theme_role(self.error, "error")
         layout.addWidget(self.error)
         apply = QPushButton("应用到当前图")
         self.apply_button = apply
@@ -626,7 +627,7 @@ class AnalysisOptionsPanel(QWidget):
                 controls["x_max"] = high
             else:
                 note = QLabel("X 轴与左轴共享，仅设置 Y 范围。")
-                note.setStyleSheet("color: #78909c;")
+                apply_theme_role(note, "hint")
                 form.addRow(note)
             if spec.editable_y:
                 row, low, high = self._axis_range_row(values, "y")
@@ -637,7 +638,7 @@ class AnalysisOptionsPanel(QWidget):
                 controls["y_max"] = high
             else:
                 note = QLabel("该轴范围由其他栏目控制。")
-                note.setStyleSheet("color: #78909c;")
+                apply_theme_role(note, "hint")
                 form.addRow(note)
             self.axis_sections_layout.addWidget(group)
             self.axis_controls[spec.key] = controls
@@ -793,7 +794,7 @@ class AnalysisOptionsPanel(QWidget):
                     if not math.isfinite(unified_interval) or unified_interval <= 0:
                         raise ValueError("主刻度间隔必须为有限正数或留空")
         except (ValueError, TypeError) as exc:
-            self.error.setStyleSheet("color: #a33")
+            apply_theme_role(self.error, "error")
             self.error.setText(str(exc))
             return
         for key, value in changes.items():
@@ -851,5 +852,5 @@ class AnalysisOptionsPanel(QWidget):
         self._refresh_unified_tick_controls(self.tab)
         self._rebuild_axis_limit_page(self.tab)
         self.applied.emit(self.tab)
-        self.error.setStyleSheet("color: #2e7d32")
+        apply_theme_role(self.error, "success")
         self.error.setText("已应用")

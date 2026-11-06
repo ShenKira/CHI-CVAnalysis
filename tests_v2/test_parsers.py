@@ -2,7 +2,9 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+from cvanalysis.io.chi import ChiCVParser
 from cvanalysis.io.registry import load_files, parse_file
 
 
@@ -111,6 +113,12 @@ def test_legacy_cv_analyzer_adapter(cv_file_factory):
     assert result["cycle_num"] == 1
     assert result["capacitance"] > 0
     assert analyzer._get_valid_capacitances()
+
+
+def test_cv_parser_reports_missing_header():
+    path = Path("bad.txt")
+    with pytest.raises(Exception, match="未找到"):
+        ChiCVParser().parse("Cyclic Voltammetry\ninvalid", path)
 
 
 def test_legacy_eis_analyzer_adapter():

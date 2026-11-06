@@ -46,8 +46,10 @@ from cvanalysis.plotting.legend import (
     cycle_legend_groups,
     cycle_legend_limit,
     dataset_file_numbers,
+    dataset_runs,
     effective_template,
     preview_label,
+    resolve_legend_labels,
     template_uses_cycle,
 )
 from cvanalysis.plotting.spec import PlotSpec
@@ -308,16 +310,23 @@ class _CycleRange:
         self.index = f"{start}-{end}"
 
 
-def _cycle_range_text(spec: PlotSpec, run: CVRun, start: int, end: int, *, multi_run: bool) -> str:
+def _cycle_range_text(
+    spec: PlotSpec,
+    label: str,
+    start: int,
+    end: int,
+    *,
+    multi_run: bool,
+) -> str:
     if start == end:
         if multi_run:
-            return plot_text(spec, "legend.cv_run_cycle", label=run.legend_name, cycle=start)
+            return plot_text(spec, "legend.cv_run_cycle", label=label, cycle=start)
         return plot_text(spec, "legend.cv_cycle", cycle=start)
     if multi_run:
         return plot_text(
             spec,
             "legend.cv_run_cycle_range",
-            label=run.legend_name,
+            label=label,
             start=start,
             end=end,
         )
@@ -403,6 +412,11 @@ def draw_cv_overlay(
     line_handles: list[tuple[str, str]] = []
     legend_warnings: set[str] = set()
     file_numbers = dataset_file_numbers(dataset)
+    resolved_labels = resolve_legend_labels(
+        dataset_runs(dataset),
+        spec=spec,
+        file_numbers=file_numbers,
+    )
     multi_run = len(runs) > 1
 
     for run_index, (run, cycles, template, per_cycle_template, groups) in enumerate(run_layouts):
@@ -410,6 +424,8 @@ def draw_cv_overlay(
             warnings.append(f"{run.display_name} 没有可绘制的有效循环")
             continue
         rate = run.metadata.scan_rate
+        resolved = resolved_labels.get(run.run_id)
+        run_label = resolved.label if resolved is not None else run.legend_name
         if groups is not None:
             for group in groups:
                 if color_by_run:
@@ -419,10 +435,10 @@ def draw_cv_overlay(
                     color_index += 1
                 range_label = _cycle_range_text(
                     spec,
-                    run,
+                    run_label,
                     group.start,
                     group.end,
-                    multi_run=multi_run,
+                    multi_run=multi_run or bool(resolved and resolved.manual),
                 )
                 if per_cycle_template:
                     if group.start == group.end:
@@ -488,7 +504,7 @@ def draw_cv_overlay(
                         cycle=cycles[0],
                         cycle_number=cycles[0].index,
                         file_number=file_numbers.get(run.run_id),
-                        fallback=run.legend_name,
+                        fallback=run_label,
                     )
                     for token in unknown:
                         legend_warnings.add(f"图例模板包含未知字段: {{{token}}}")
@@ -497,20 +513,22 @@ def draw_cv_overlay(
                 if run_index in labeled_runs:
                     label = None
                 else:
-                    label = run.legend_name
-                    if rate:
+                    label = run_label
+                    if rate and not (
+                        resolved is not None and (resolved.compact or resolved.manual)
+                    ):
                         label = plot_text(
                             spec,
                             "legend.cv_run_rate",
-                            label=run.legend_name,
+                            label=run_label,
                             rate=rate,
                         )
                     labeled_runs.add(run_index)
-            elif multi_run:
+            elif multi_run or (resolved is not None and resolved.manual):
                 label = plot_text(
                     spec,
                     "legend.cv_run_cycle",
-                    label=run.legend_name,
+                    label=run_label,
                     cycle=cycle_label,
                 )
             else:

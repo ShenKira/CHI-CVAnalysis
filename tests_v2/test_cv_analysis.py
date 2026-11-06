@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import copy
+
 import numpy as np
 import pytest
 from types import SimpleNamespace
@@ -10,6 +12,7 @@ from cvanalysis.analysis.cv import (
     dunn_fraction_vs_scan_rate,
     fit_b_value,
     scan_window_warning,
+    summarize_run,
     trasatti_analysis,
 )
 from cvanalysis.domain.errors import AnalysisError
@@ -273,3 +276,20 @@ def test_dunn_contributions_use_the_standard_transformed_regression():
     ss_res = np.sum((transformed - transformed_prediction) ** 2, axis=0)
     ss_tot = np.sum((transformed - transformed.mean(axis=0)) ** 2, axis=0)
     assert result.mean_r2 == pytest.approx(np.mean(1.0 - ss_res / ss_tot))
+
+
+def test_trimmed_statistics_share_sample_and_recompute_clears_flags(synthetic_cv_runs):
+    run = synthetic_cv_runs[0]
+    analyze_cv_run(run, sensitivity_factor=1e-12)
+    assert all(cycle.is_outlier for cycle in run.cycles)
+    analyze_cv_run(run, sensitivity_factor=1e12)
+    assert not any(cycle.is_outlier for cycle in run.cycles)
+    run.cycles.append(copy.deepcopy(run.cycles[0]))
+    for index, (cycle, value) in enumerate(zip(run.cycles, [1, 1.1, 10]), 1):
+        cycle.index = index
+        cycle.capacitance_F = value
+    summary = summarize_run(run, outlier_count=1)
+    assert summary.mean_capacitance_F == pytest.approx(1.05)
+    assert summary.sd_capacitance_F == pytest.approx(np.std([1, 1.1], ddof=1))
+    assert summary.valid_cycles == 2 and summary.excluded_cycles == 1
+    assert summary.outlier_cycles == [3]

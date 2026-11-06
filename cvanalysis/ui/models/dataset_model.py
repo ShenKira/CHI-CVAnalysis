@@ -8,7 +8,6 @@ import json
 from typing import Any, Iterable
 from uuid import uuid4
 
-import numpy as np
 from PySide6.QtCore import QAbstractItemModel, QMimeData, QModelIndex, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
@@ -21,22 +20,24 @@ from cvanalysis.domain.units import (
     AREAL_CAPACITANCE,
     CAPACITANCE,
     CURRENT,
-    IMPEDANCE,
     SPECIFIC_CAPACITANCE,
     format_with_unit,
+    normalize_capacitance,
 )
+from cvanalysis.plotting.legend import dataset_file_numbers, resolve_legend_labels
+from cvanalysis.ui.theme import theme_color
 
 
 COLUMNS = [
     "名称",
+    "图例/别名",
     "扫速 / 高频 / 电流",
     "窗口 / 频率",
     "循环 / 点数",
-    "平均电容 / Rs / 放电容量",
-    "单位面积 / Rct / 比容量",
-    "质量比 / Cdl / 保持段",
     "状态",
 ]
+
+ALIAS_COLUMN = 1
 
 
 @dataclass(eq=False)
@@ -98,6 +99,8 @@ class DatasetTreeModel(QAbstractItemModel):
         self.visible_runs: dict[str, bool] = {}
         self.cycle_selection: dict[str, list[int]] = {}
         self.dataset = Dataset()
+        self._auto_labels = {}
+        self._text_values: dict | None = None
         self._drag_id = uuid4().hex
 
     # -- Qt model API ----------------------------------------------------
@@ -124,6 +127,8 @@ class DatasetTreeModel(QAbstractItemModel):
     def headerData(self, section: int, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole and 0 <= section < len(COLUMNS):
             return COLUMNS[section]
+        if orientation == Qt.Horizontal and role == Qt.ToolTipRole and section == ALIAS_COLUMN:
+            return "人工别名优先；无别名时显示自动缩写/紧凑结果；两者都没有时为空。双击可设置别名。"
         return None
 
     def flags(self, index: QModelIndex):
@@ -214,6 +219,7 @@ class DatasetTreeModel(QAbstractItemModel):
         )
         self.layoutChanged.emit()
         self.order_changed.emit()
+        self.refresh_auto_labels()
         return True
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
@@ -229,12 +235,19 @@ class DatasetTreeModel(QAbstractItemModel):
             return self._display(node, column)
         if role == Qt.ToolTipRole:
             return self._tooltip(node)
+        alias_text, alias_auto = self._alias_text(node)
         if role == Qt.FontRole and node.kind == "group":
             font = QApplication.font()
             font.setBold(True)
             return font
+        if role == Qt.FontRole and column == ALIAS_COLUMN and alias_auto:
+            font = QApplication.font()
+            font.setItalic(True)
+            return font
+        if role == Qt.ForegroundRole and column == ALIAS_COLUMN and alias_auto:
+            return QColor(theme_color("muted"))
         if role == Qt.ForegroundRole and node.kind == "cycle" and node.extra.get("invalid"):
-            return QColor("#a33")
+            return QColor(theme_color("error"))
         return None
 
     def setData(self, index: QModelIndex, value, role=Qt.EditRole) -> bool:
@@ -338,11 +351,18 @@ class DatasetTreeModel(QAbstractItemModel):
 
     # -- rebuild ---------------------------------------------------------
     def set_dataset(self, dataset: Dataset, visible_runs: dict[str, bool] | None = None,
-                    cycle_selection: dict[str, list[int]] | None = None) -> None:
+                    cycle_selection: dict[str, list[int]] | None = None,
+                    text_values: dict | None = None) -> None:
         self.beginResetModel()
         self.dataset = dataset
         self.visible_runs = dict(visible_runs or {})
         self.cycle_selection = {key: list(value) for key, value in (cycle_selection or {}).items()}
+        self._text_values = text_values
+        self._auto_labels = resolve_legend_labels(
+            dataset.all_runs(),
+            file_numbers=dataset_file_numbers(dataset),
+            text_values=text_values,
+        )
         self.root = TreeNode("root")
         self._nodes = {}
         self._short_labels = {}
@@ -412,88 +432,87 @@ class DatasetTreeModel(QAbstractItemModel):
         self.beginResetModel()
         self.endResetModel()
 
+    def refresh_auto_labels(self, text_values: dict | None = None) -> None:
+        """Recompute derived legend labels after order/alias changes."""
+        if text_values is not None:
+            self._text_values = text_values
+        self._auto_labels = resolve_legend_labels(
+            self.dataset.all_runs(),
+            file_numbers=dataset_file_numbers(self.dataset),
+            text_values=self._text_values,
+        )
+        for run_id in self._nodes:
+            index = self.index_for_run(run_id)
+            if index.isValid():
+                self.dataChanged.emit(
+                    index.sibling(index.row(), ALIAS_COLUMN),
+                    index.sibling(index.row(), ALIAS_COLUMN),
+                )
+
     # -- display ---------------------------------------------------------
     def _display(self, node: TreeNode, column: int) -> str:
         if column == 0:
             return node.label
         if node.kind == "group":
-            if column == 3:
+            if column == 4:
                 return f"{len(node.children)} 个数据"
             return ""
         if node.kind == "run" and node.run is not None:
+            if column == ALIAS_COLUMN:
+                return self._alias_text(node)[0]
             return self._run_column(node.run, column)
         if node.kind == "cycle" and isinstance(node.run, CVRun) and node.cycle_index is not None:
             cycle = next((item for item in node.run.cycles if item.index == node.cycle_index), None)
             if cycle is None:
                 return ""
-            if column == 2:
+            if column == 3:
                 return f"{cycle.voltage_window:.3g} V"
-            if column == 4:
-                return format_with_unit(cycle.capacitance_F, CAPACITANCE, digits=4)
             if column == 5:
-                return f"{cycle.integral_area_A_V:.3e} A·V"
-            if column == 7:
                 return cycle.outlier_reason or cycle.warning or ("有效" if cycle.valid else "无效")
         return ""
 
     def _run_column(self, run: CVRun | EISRun | CPRun, column: int) -> str:
         if isinstance(run, CVRun):
-            summary = run.summary if isinstance(run.summary, CVRunSummary) else None
-            if column == 1:
-                return f"{run.scan_rate:g} V/s" if run.scan_rate else "—"
             if column == 2:
-                return f"{run.voltage_window:.3g} V" if run.voltage_window else "—"
+                return f"{run.scan_rate:g} V/s" if run.scan_rate else "—"
             if column == 3:
-                return f"{len(run.cycles)} 循环"
+                return f"{run.voltage_window:.3g} V" if run.voltage_window else "—"
             if column == 4:
-                return format_with_unit(summary.mean_capacitance_F if summary else None, CAPACITANCE, digits=4)
+                return f"{len(run.cycles)} 循环"
             if column == 5:
-                if summary and summary.mean_cap_per_area:
-                    return format_with_unit(summary.mean_cap_per_area, AREAL_CAPACITANCE, digits=4)
-                return "—"
-            if column == 6:
-                if summary and summary.mean_cap_per_mass:
-                    return format_with_unit(summary.mean_cap_per_mass, SPECIFIC_CAPACITANCE, digits=4)
-                return "—"
-            if column == 7:
                 return _status_for_run(run)
         elif isinstance(run, EISRun):
-            metrics = run.summary if isinstance(run.summary, EISMetrics) else None
-            if column == 1:
-                return f"{run.metadata.high_freq:.3g} Hz" if run.metadata.high_freq else "—"
             if column == 2:
-                return f"{run.metadata.low_freq:.3g}–{run.metadata.high_freq:.3g} Hz" if run.metadata.low_freq and run.metadata.high_freq else "—"
+                return f"{run.metadata.high_freq:.3g} Hz" if run.metadata.high_freq else "—"
             if column == 3:
-                return f"{len(run.freq)} 点"
+                return f"{run.metadata.low_freq:.3g}–{run.metadata.high_freq:.3g} Hz" if run.metadata.low_freq and run.metadata.high_freq else "—"
             if column == 4:
-                return format_with_unit(metrics.rs_ohm if metrics else None, IMPEDANCE, digits=4)
+                return f"{len(run.freq)} 点"
             if column == 5:
-                return format_with_unit(metrics.rct_ohm if metrics else None, IMPEDANCE, digits=4)
-            if column == 6:
-                return format_with_unit(metrics.cdl_F if metrics else None, CAPACITANCE, digits=4)
-            if column == 7:
                 return _status_for_run(run)
         elif isinstance(run, CPRun):
             summary = run.summary if isinstance(run.summary, CPRunSummary) else None
-            if column == 1:
-                return format_with_unit(run.applied_current_A, CURRENT, digits=3)
             if column == 2:
-                return f"{run.voltage_window:.3g} V" if run.voltage_window else "—"
+                return format_with_unit(run.applied_current_A, CURRENT, digits=3)
             if column == 3:
-                return f"{summary.cycle_count} 循环" if summary else "—"
+                return f"{run.voltage_window:.3g} V" if run.voltage_window else "—"
             if column == 4:
-                if summary and np.isfinite(summary.mean_discharge_capacity_C):
-                    return f"{summary.mean_discharge_capacity_C / 3.6:.4g} mAh"
-                return "—"
+                return f"{summary.cycle_count} 循环" if summary else "—"
             if column == 5:
-                if summary and np.isfinite(summary.mean_specific_capacity_mAh_g):
-                    return f"{summary.mean_specific_capacity_mAh_g:.4g} mAh/g"
-                return "—"
-            if column == 6:
-                return "已记录" if summary and summary.has_hold_data else "无"
-            if column == 7:
                 return _status_for_run(run)
         return ""
+
+    def _alias_text(self, node: TreeNode) -> tuple[str, bool]:
+        if node.kind != "run" or node.run is None:
+            return "", False
+        run = node.run
+        alias = run.legend_alias.strip()
+        if alias:
+            return alias, False
+        decision = self._auto_labels.get(run.run_id)
+        if decision is not None and decision.auto:
+            return decision.label, True
+        return "", False
 
     def _tooltip(self, node: TreeNode) -> str:
         if node.run is None:
@@ -502,6 +521,13 @@ class DatasetTreeModel(QAbstractItemModel):
         lines = [run.display_name]
         if run.source:
             lines.append(str(run.source))
+        alias = run.legend_alias.strip()
+        if alias:
+            lines.append(f"图例别名: {alias}")
+        else:
+            decision = self._auto_labels.get(run.run_id)
+            if decision is not None and decision.auto:
+                lines.append(f"自动图例: {decision.label}")
         if run.legend_template:
             lines.append(f"图例模板: {run.legend_template}")
         if isinstance(run, CVRun):
@@ -520,6 +546,48 @@ class DatasetTreeModel(QAbstractItemModel):
             current = format_with_unit(run.applied_current_A, CURRENT, digits=3)
             hold = "含保持段电流" if run.has_hold_data else "无保持段电流"
             lines.append(f"CP · 电流 {current} · 窗口 {run.voltage_window or 0:.3g} V · {hold}")
+        if node.kind == "cycle" and isinstance(run, CVRun) and node.cycle_index is not None:
+            cycle = next((item for item in run.cycles if item.index == node.cycle_index), None)
+            if cycle is not None:
+                lines.append(f"Cycle {cycle.index} · 窗口 {cycle.voltage_window:.3g} V")
+                lines.append(
+                    "电容: "
+                    + format_with_unit(cycle.capacitance_F, CAPACITANCE, digits=4)
+                )
+                area_value = normalize_capacitance(
+                    cycle.capacitance_F,
+                    "area",
+                    area_cm2=run.params.area_cm2,
+                    mass_mg=run.params.mass_mg,
+                )
+                mass_value = normalize_capacitance(
+                    cycle.capacitance_F,
+                    "mass",
+                    area_cm2=run.params.area_cm2,
+                    mass_mg=run.params.mass_mg,
+                )
+                lines.append(
+                    "C/A: "
+                    + (
+                        format_with_unit(area_value, AREAL_CAPACITANCE, digits=4)
+                        if run.params.area_cm2
+                        else "—"
+                    )
+                )
+                lines.append(
+                    "C/m: "
+                    + (
+                        format_with_unit(mass_value, SPECIFIC_CAPACITANCE, digits=4)
+                        if run.params.mass_mg
+                        else "—"
+                    )
+                )
+                lines.append(f"积分面积: {cycle.integral_area_A_V:.3e} A·V")
+                lines.append(
+                    cycle.outlier_reason
+                    or cycle.warning
+                    or ("有效" if cycle.valid else "无效")
+                )
         if isinstance(run, CVRun) and isinstance(run.summary, CVRunSummary):
             lines.extend(run.summary.warnings)
         if isinstance(run, EISRun) and isinstance(run.summary, EISMetrics):

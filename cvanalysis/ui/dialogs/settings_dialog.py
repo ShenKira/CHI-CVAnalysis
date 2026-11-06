@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -11,16 +12,54 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
+
+from cvanalysis.appearance import ThemeDefinition, load_themes
+
+
+class ThemePreview(QWidget):
+    """Small color-chip preview driven by the theme JSON swatches."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(5)
+        self._layout.addStretch(1)
+
+    def set_theme(self, theme: ThemeDefinition) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        swatches = theme.swatches or tuple(
+            theme.colors.get(key, "")
+            for key in ("primary", "focus", "header_bg", "text")
+        )
+        for color in swatches:
+            if not color:
+                continue
+            chip = QLabel(self)
+            chip.setFixedSize(22, 22)
+            chip.setToolTip(color)
+            chip.setStyleSheet(
+                f"background: {color}; border-radius: 5px;"
+            )
+            self._layout.addWidget(chip)
+        self._layout.addStretch(1)
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, settings: dict, parent=None):
+    def __init__(self, settings: dict, parent=None, *, themes=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
+        self.themes = list(themes) if themes is not None else load_themes()
         scale = max(1.0, min(1.6, self.font().pointSizeF() / 11.0))
         self.resize(int(500 * scale), int(640 * scale))
         self._build_ui(settings)
@@ -137,8 +176,25 @@ class SettingsDialog(QDialog):
         eis_form.addRow("默认拟合模型:", self.fit_model_combo)
         layout.addWidget(eis_group)
 
-        ui_group = QGroupBox("??")
+        ui_group = QGroupBox("GUI 设置")
         ui_form = QFormLayout(ui_group)
+        self.theme_combo = QComboBox()
+        for theme in self.themes:
+            self.theme_combo.addItem(theme.label, theme.id)
+            self.theme_combo.setItemData(
+                self.theme_combo.count() - 1,
+                theme.description or theme.label,
+                Qt.ToolTipRole,
+            )
+        current_theme = str(settings.get("ui", {}).get("theme", "default"))
+        theme_index = self.theme_combo.findData(current_theme)
+        self.theme_combo.setCurrentIndex(max(0, theme_index))
+        self.theme_combo.currentIndexChanged.connect(self._refresh_theme_preview)
+        ui_form.addRow("界面主题:", self.theme_combo)
+
+        self.theme_preview = ThemePreview()
+        ui_form.addRow("主题预览:", self.theme_preview)
+
         self.ui_scale_spin = QDoubleSpinBox()
         self.ui_scale_spin.setRange(0.8, 1.6)
         self.ui_scale_spin.setSingleStep(0.05)
@@ -147,11 +203,19 @@ class SettingsDialog(QDialog):
         self.ui_scale_spin.setToolTip("高分辨率屏幕可调到 1.15–1.30；修改后立即生效并保存。")
         ui_form.addRow("界面缩放倍数:", self.ui_scale_spin)
         layout.addWidget(ui_group)
+        self._refresh_theme_preview()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _refresh_theme_preview(self, *args) -> None:
+        theme_id = self.theme_combo.currentData()
+        for theme in self.themes:
+            if theme.id == theme_id:
+                self.theme_preview.set_theme(theme)
+                return
 
     def _sync_outlier_z(self) -> None:
         self.outlier_z_spin.setEnabled(
@@ -186,6 +250,7 @@ class SettingsDialog(QDialog):
                 "fit_model": self.fit_model_combo.currentData(),
             },
             "ui": {
+                "theme": self.theme_combo.currentData(),
                 "scale": self.ui_scale_spin.value(),
             },
         }

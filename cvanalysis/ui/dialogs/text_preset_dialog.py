@@ -29,6 +29,7 @@ from cvanalysis.plotting.texts import (
     validate_text_template,
 )
 from cvanalysis.services.settings_service import SettingsService
+from cvanalysis.ui.theme import apply_theme_role
 
 
 _CATEGORY_LABELS = {
@@ -80,7 +81,7 @@ class TextPresetEditorDialog(QDialog):
             "输入空格表示空文字。支持 Matplotlib mathtext，如 $v^{-1/2}$。"
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: #546e7a;")
+        apply_theme_role(info, "muted")
         layout.addWidget(info)
 
         top = QFormLayout()

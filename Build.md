@@ -1,11 +1,21 @@
 # CVAnalysis v2 Build 交接说明
 
-> 状态（2026-11-03）：v2.0.1 的 **StandAlone** 与 **OneFile** 均已构建成功并通过启动验证。
+> 状态（2026-11-06）：v2.0.2 源码已发布，StandAlone / OneFile 构建结果在本文件后续补充。
 > 本文记录已验证环境、关键根因、构建命令和验证方法，供下一位接手构建/发布的 Agent 或开发者使用。
 
 ## 1. 已验证产物
 
-### v2.0.1
+### v2.0.2
+
+| 产物 | 路径 | 大小 | SHA256 |
+| --- | --- | ---: | --- |
+| StandAlone | `CVAnalysis_StandAlone_v2.0.2\start_gui.dist\CVAnalysis_v2.0.2.exe` | 构建后填写 | 构建后填写 |
+| OneFile | `CVAnalysis_OneFile_v2.0.2\CVAnalysis_v2.0.2.exe` | 构建后填写 | 构建后填写 |
+
+- 文件版本资源：`2.0.2.0`（StandAlone / OneFile 均需验证）。
+- 构建日志：`build_cache\logs\build_v2.0.2_*.log`（本地忽略，不提交）。
+
+### v2.0.1（历史）
 
 | 产物 | 路径 | 大小 | SHA256 |
 | --- | --- | ---: | --- |
@@ -39,17 +49,15 @@
 - pandas：3.1.0
 - matplotlib：3.10.8
 - pytest / pytest-qt：9.2.0 / 4.5.0（仅开发测试）
-- 构建选项：`--enable-plugin=pyside6`、`--lto=no`、`--onefile-no-compression`
+- 构建选项：`--enable-plugin=pyside6`、`--include-data-files=cvanalysis/default_themes.json=cvanalysis/default_themes.json`、`--lto=no`、`--onefile-no-compression`
 
 源码测试基线（`nuitka_pack` 环境）：
 
 ```text
-250 passed, 2 warnings
+248 passed, 0 warnings
 ```
 
-两条警告仍是既有的 Matplotlib tight-layout 警告；pytest 进程退出码 1 是已记录的 teardown 问题，无测试失败摘要。
-
-两条警告仍是既有的 Matplotlib tight-layout 警告。
+多 CV 长文件名图例的 tight-layout 警告已消除；pytest 在打印全部通过结果后仍可能以 teardown 访问冲突退出（本机实测 `-1073741819`），无测试失败摘要，不阻塞打包。主题模板 `cvanalysis/default_themes.json` 会随 StandAlone / OneFile 一起打包。
 
 ## 3. 关键根因与修复（必读）
 
@@ -138,10 +146,10 @@ PySide6 6.10.2 在 `LegendTemplateDialog` 构造时连接 `textChanged` 信号�
 ```powershell
 $root = (Resolve-Path .).Path
 Add-MpPreference -ExclusionPath "$root\build_cache"
-Add-MpPreference -ExclusionPath "$root\CVAnalysis_OneFile_v2.0.0"
-Add-MpPreference -ExclusionPath "$root\CVAnalysis_StandAlone_v2.0.0"
+Add-MpPreference -ExclusionPath "$root\CVAnalysis_OneFile_v2.0.2"
+Add-MpPreference -ExclusionPath "$root\CVAnalysis_StandAlone_v2.0.2"
 Add-MpPreference -ExclusionPath "$env:TEMP\CVAnalysis"
-Add-MpPreference -ExclusionProcess "CVAnalysis_v2.0.0.exe"
+Add-MpPreference -ExclusionProcess "CVAnalysis_v2.0.2.exe"
 Add-MpPreference -ExclusionProcess "cl.exe"
 ```
 
@@ -152,10 +160,10 @@ Add-MpPreference -ExclusionProcess "cl.exe"
 - 用法：
 
 ```bat
-build.bat                  :: 默认 2.0.1，构建 StandAlone + OneFile
-build.bat 2.0.1 all
-build.bat 2.0.1 standalone
-build.bat 2.0.1 onefile
+build.bat                  :: 默认 2.0.2，构建 StandAlone + OneFile
+build.bat 2.0.2 all
+build.bat 2.0.2 standalone
+build.bat 2.0.2 onefile
 ```
 
 - 优先使用 `nuitka_pack` 环境，可用 `CVANALYSIS_PYTHON` 覆盖 Python 路径。
@@ -175,25 +183,25 @@ build.bat 2.0.1 onefile
 
 ```powershell
 # 常规构建（缓存已热）
-cmd /c build.bat 2.0.1 standalone
-cmd /c build.bat 2.0.1 onefile
-cmd /c build.bat 2.0.1 all
+cmd /c build.bat 2.0.2 standalone
+cmd /c build.bat 2.0.2 onefile
+cmd /c build.bat 2.0.2 all
 
 # 首次在 PATH / Nuitka / Python 变化后构建
 $env:CVANALYSIS_FORCE_DLL_CACHE = '1'
-cmd /c build.bat 2.0.1 all
+cmd /c build.bat 2.0.2 all
 Remove-Item Env:CVANALYSIS_FORCE_DLL_CACHE
 ```
 
 建议把构建输出重定向到 `build_cache\logs\`，便于排查 Defender / DLL 问题：
 
 ```powershell
-cmd /c build.bat 2.0.1 all *> "build_cache\logs\build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+cmd /c build.bat 2.0.2 all *> "build_cache\logs\build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 ```
 
 ## 6. 验证清单
 
-1. exe 存在，版本资源为 `2.0.1.0`，记录大小和 SHA256。
+1. exe 存在，版本资源为 `2.0.2.0`，记录大小和 SHA256。
 2. StandAlone 关键文件存在：
    - `ffi.dll`
    - `libexpat.dll`
@@ -204,7 +212,7 @@ cmd /c build.bat 2.0.1 all *> "build_cache\logs\build_$(Get-Date -Format 'yyyyMM
 
 ```powershell
 $env:QT_QPA_PLATFORM = 'offscreen'
-Start-Process -FilePath "CVAnalysis_StandAlone_v2.0.1\start_gui.dist\CVAnalysis_v2.0.1.exe" -PassThru
+Start-Process -FilePath "CVAnalysis_StandAlone_v2.0.2\start_gui.dist\CVAnalysis_v2.0.2.exe" -PassThru
 # 等待 30 秒，确认进程未退出
 ```
 
@@ -223,7 +231,7 @@ python -m pytest tests_v2 -q
 
 ## 7. 已知问题 / 注意事项
 
-- 完整 pytest 在当前环境可能在打印 `202 passed` 后以 `-1073741819` 退出（测试进程 teardown 问题）；单独的应用启动/退出测试退出码为 0，不阻塞打包。
+- 完整 pytest 在当前环境会在打印 `248 passed` 后以 `-1073741819` 退出（测试进程 teardown 访问冲突）；单独的应用启动/退出测试退出码为 0，不阻塞打包。
 - Nuitka anti-bloat 会提示未包含 `PIL.ImageTk`、pandas numba、pandas plotting；应用直接使用 matplotlib，当前构建已验证绘图可用。
 - 应用首次运行会在 exe 同目录创建 `config.json`；这是用户配置，不要提交。
 - 旧 `startup_error.log` 中可能保留修复前中间构建的 `ImportError` 记录；以最终产物的新增日志为准。
@@ -243,25 +251,19 @@ python -m pytest tests_v2 -q
 - 不要执行 `git clean` / `git reset --hard`；用户数据就在工作区。
 - `config.json` 已在 Git 索引中标记删除并加入 `.gitignore`；提交时确认它不再被跟踪。
 - 远端为 `origin https://github.com/ShenKira/CHI-CVAnalysis.git`。v1 已冻结；推荐保留 v1 tags，并用 `v1-archive` 分支 + `v2` 分支同步。
-- 推荐同步方式（**不 force-push**）：提交 v2 → 从 `origin/main` 建 `v1-archive` → 用 `git merge --allow-unrelated-histories --no-ff -s ours origin/main` 保留 v2 文件树并把 v1.3.0 作为第二父提交 → 推送 `main`、`v2` 和 `v2.0.0` tag。
-- 本仓库本地 v1.1 与远端 v1.3.0 是**两段 unrelated history**；不加 `--allow-unrelated-histories` 会报 `refusing to merge unrelated histories`。
+- 当前发布线：`main` 与 `v2` 同步，补丁版本使用轻量/附注 tag（如 `v2.0.2`）。
+- 推荐补丁发布流程（**不 force-push**）：确认 `git status` → 提交代码和文档 → 推送 `main`、`v2` → 创建并推送 `v2.0.2` tag。
+- 本仓库 v1 与 v2 在历史上是两段 unrelated history；不要用普通 merge 重新引入 v1，保留 `v1-archive` 分支和已有 tags。
 - 示例流程（确认 diff 后执行）：
 
 ```powershell
 git add -A
 git status --short
-git commit -m "CVAnalysis v2.0.0: rewrite workspace and verified Nuitka builds"
-
-git fetch origin
-git branch v1-archive origin/main
-git push origin v1-archive
-
-git merge --allow-unrelated-histories --no-ff -s ours origin/main -m "Merge v1.3.0 archive into v2.0.0; keep v2 tree"
-git branch v2
-
+git diff --cached --name-only
+git commit -m "CVAnalysis v2.0.2: GUI themes, legend aliases and per-cycle results"
 git push origin main v2
-git tag -a v2.0.0 -m "CVAnalysis v2.0.0"
-git push origin v2.0.0
+git tag -a v2.0.2 -m "CVAnalysis v2.0.2"
+git push origin v2.0.2
 ```
 
 - 如果 `main` 有 branch protection，先推送 `v2` 分支，再从 `v2` 向 `main` 开 PR；不要 force-push。

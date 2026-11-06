@@ -17,7 +17,7 @@ from cvanalysis.plotting.axis_limits import apply_axis_limits
 from cvanalysis.plotting.colors import apply_color_overrides
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure
-from cvanalysis.plotting.paper import finish_paper, paper_overrides
+from cvanalysis.plotting.paper import finish_paper, fit_standard_legends, paper_overrides
 from cvanalysis.plotting.texts import plot_text_context
 from cvanalysis.plotting.ticks import apply_log_tick_formats, apply_unified_ticks
 
@@ -31,6 +31,8 @@ def _finish_layout(figure: Figure, spec: PlotSpec, style: PlotStyle) -> None:
     finalize_figure(figure, style)
     if spec.paper_layout.get("enabled"):
         finish_paper(figure, spec, style)
+    else:
+        fit_standard_legends(figure, spec, style)
 
 
 def render_plot(

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
@@ -447,7 +448,13 @@ def finalize_figure(figure: Figure, style: PlotStyle) -> None:
             pass
     elif style.tight_layout:
         try:
-            figure.tight_layout()
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", UserWarning)
+                figure.tight_layout()
+            if any("Tight layout not applied" in str(item.message) for item in caught):
+                # A wide legend can make tight_layout fail.  Keep the current
+                # geometry and let the legend fitter reserve space explicitly.
+                figure.set_layout_engine(None)
         except Exception:
             pass
     style.apply(figure)

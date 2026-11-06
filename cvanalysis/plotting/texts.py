@@ -187,6 +187,24 @@ TEXT_FIELDS: tuple[TextField, ...] = (
         "{label} C{start}-{end}",
         ("label", "start", "end"),
     ),
+    _legend(
+        "cv_compact",
+        "CV 相似文件名紧凑图例",
+        "#{file_n} {CV_Voltage} {Scan_Rate}",
+        ("file_n", "CV_Voltage", "Scan_Rate"),
+    ),
+    _legend(
+        "eis_compact",
+        "EIS 相似文件名紧凑图例",
+        "#{file_n} EIS",
+        ("file_n",),
+    ),
+    _legend(
+        "cp_compact",
+        "CP 相似文件名紧凑图例",
+        "#{file_n}",
+        ("file_n",),
+    ),
 )
 
 DEFAULT_TEXTS: dict[str, str] = {field.key: field.default for field in TEXT_FIELDS}

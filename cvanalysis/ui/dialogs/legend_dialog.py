@@ -8,15 +8,24 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
     QVBoxLayout,
 )
 
 from cvanalysis.domain.models import CPRun, CVRun, EISRun
-from cvanalysis.plotting.legend import file_numbers_for_runs, legend_tokens, render_legend_template, template_uses_cycle
+from cvanalysis.ui.theme import apply_theme_role
+from cvanalysis.plotting.legend import (
+    file_numbers_for_runs,
+    legend_tokens,
+    render_legend_template,
+    resolve_legend_labels,
+    template_uses_cycle,
+)
 
 
 def build_token_combo(parent=None, kind: str | None = None) -> QComboBox:
@@ -47,9 +56,11 @@ class LegendTemplateDialog(QDialog):
         *,
         title: str = "设置数据默认图例模板",
         file_numbers: dict[str, int] | None = None,
+        context_runs: list[CVRun | EISRun | CPRun] | None = None,
     ):
         super().__init__(parent)
         self.runs = list(runs)
+        self.context_runs = list(context_runs) if context_runs is not None else list(self.runs)
         self.file_numbers = file_numbers if file_numbers is not None else file_numbers_for_runs(self.runs)
         self.setWindowTitle(title)
         self.setMinimumWidth(560)
@@ -87,7 +98,7 @@ class LegendTemplateDialog(QDialog):
             "{file_n} 随数据集文件排序更新；{cycle_n} 保持文件内原始循环号。"
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #607d8b;")
+        apply_theme_role(hint, "hint")
         layout.addWidget(hint)
 
         layout.addWidget(QLabel("预览:"))
@@ -98,7 +109,7 @@ class LegendTemplateDialog(QDialog):
 
         self.warning = QLabel("")
         self.warning.setWordWrap(True)
-        self.warning.setStyleSheet("color: #a33;")
+        apply_theme_role(self.warning, "error")
         layout.addWidget(self.warning)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -107,6 +118,10 @@ class LegendTemplateDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def set_context_runs(self, runs: list[CVRun | EISRun | CPRun]) -> None:
+        self.context_runs = list(runs)
+        self._refresh_preview()
 
     def _initial_template(self) -> str:
         templates = {run.legend_template or "" for run in self.runs}
@@ -134,9 +149,15 @@ class LegendTemplateDialog(QDialog):
         template = self.template_edit.text()
         lines: list[str] = []
         unknown: list[str] = []
+        resolved_labels = resolve_legend_labels(
+            self.context_runs,
+            file_numbers=self.file_numbers,
+        )
         for run in self.runs[:4]:
             cycle = run.cycles[0] if isinstance(run, CVRun) and run.cycles else None
-            fallback = f"Cycle {cycle.index}" if cycle is not None else run.legend_name
+            resolved = resolved_labels.get(run.run_id)
+            run_label = resolved.label if resolved is not None else run.legend_name
+            fallback = f"Cycle {cycle.index}" if cycle is not None else run_label
             if template:
                 labels: list[str] = []
                 unresolved_all: list[str] = []
@@ -159,9 +180,9 @@ class LegendTemplateDialog(QDialog):
                 unknown.extend(token for token in unresolved_all if token not in unknown)
             else:
                 label = (
-                    f"默认：文件名 / Cycle {cycle.index}"
+                    f"默认：{run_label} / Cycle {cycle.index}"
                     if cycle is not None
-                    else "默认：文件名"
+                    else f"默认：{run_label}"
                 )
             lines.append(f"{run.display_name}  →  {label}")
         self.preview.setPlainText("\n".join(lines))
@@ -184,3 +205,89 @@ class LegendTemplateDialog(QDialog):
 
     def template(self) -> str:
         return self.template_edit.text().strip()
+
+
+class LegendAliasDialog(QDialog):
+    """Edit the per-run manual legend alias."""
+
+    def __init__(
+        self,
+        run: CVRun | EISRun | CPRun,
+        parent=None,
+        *,
+        default_label: str = "",
+        auto_label: str = "",
+    ):
+        super().__init__(parent)
+        self.run = run
+        self.default_label = default_label or run.legend_name
+        self.auto_label = auto_label
+        self.setWindowTitle("设置图例/别名")
+        self.setMinimumWidth(520)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+
+        info = QLabel(
+            f"为“{self.run.display_name}”设置图例显示名称。"
+            "留空时按自动规则显示；若已设置图例模板，模板优先。"
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        layout.addWidget(QLabel("图例/别名:"))
+        self.alias_edit = QLineEdit(self.run.legend_alias)
+        self.alias_edit.setPlaceholderText(self.auto_label or self.default_label)
+        self.alias_edit.textChanged.connect(self._refresh_preview)
+        layout.addWidget(self.alias_edit)
+
+        hint = QLabel(
+            "自动图例由文件名相似度和长度决定；模板中可用 {Alias} 引用这里设置的别名。"
+        )
+        hint.setWordWrap(True)
+        apply_theme_role(hint, "hint")
+        layout.addWidget(hint)
+
+        layout.addWidget(QLabel("预览:"))
+        self.preview = QLabel("")
+        self.preview.setWordWrap(True)
+        layout.addWidget(self.preview)
+
+        button_row = QHBoxLayout()
+        clear_button = QPushButton("清除别名")
+        clear_button.clicked.connect(self._clear)
+        button_row.addWidget(clear_button)
+        button_row.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("确定")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        button_row.addWidget(buttons)
+        layout.addLayout(button_row)
+        self._refresh_preview()
+
+    def _clear(self) -> None:
+        self.alias_edit.clear()
+        self.alias_edit.setFocus()
+
+    def _refresh_preview(self, *args) -> None:
+        alias = self.alias_edit.text().strip()
+        automatic = self.auto_label or self.default_label
+        if self.run.legend_template:
+            final = f"模板优先（{self.run.legend_template}）"
+        elif alias:
+            final = alias
+        else:
+            final = automatic
+        self.preview.setText(
+            f"默认文件名：{self.default_label}\n"
+            f"自动图例：{self.auto_label or '（未触发）'}\n"
+            f"最终：{final}"
+        )
+
+    def alias(self) -> str:
+        return self.alias_edit.text().strip()

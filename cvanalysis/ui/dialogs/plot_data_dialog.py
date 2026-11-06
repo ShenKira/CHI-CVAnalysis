@@ -25,9 +25,11 @@ from cvanalysis.plotting.legend import (
     dataset_file_numbers,
     preview_label,
     render_legend_template,
+    resolve_legend_labels,
     template_uses_cycle,
 )
 from cvanalysis.plotting.spec import PlotSpec
+from cvanalysis.ui.theme import apply_theme_role, theme_color
 from cvanalysis.ui.dialogs.legend_dialog import build_token_combo, insert_token
 from cvanalysis.ui.widgets.view_columns import ViewColumns
 
@@ -42,10 +44,12 @@ class PlotDataDialog(QDialog):
         kind: str,
         *,
         parent=None,
+        text_values: dict | None = None,
     ):
         super().__init__(parent)
         self.dataset = dataset
         self.spec = spec
+        self._text_values = text_values
         self.kind = (
             "cv" if kind.startswith("cv_") else "cp" if kind.startswith("cp_") else "eis"
         )
@@ -87,7 +91,7 @@ class PlotDataDialog(QDialog):
         clear_all.setProperty("secondary", True)
         clear_all.clicked.connect(lambda: self._set_all_checked(False))
         self.selection_label = QLabel("")
-        self.selection_label.setStyleSheet("color: #546e7a;")
+        apply_theme_role(self.selection_label, "muted")
         selection_row.addWidget(select_all)
         selection_row.addWidget(clear_all)
         selection_row.addStretch(1)
@@ -182,7 +186,7 @@ class PlotDataDialog(QDialog):
                             Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable
                         )
                         if not cycle.valid:
-                            child.setForeground(0, QColor("#a33"))
+                            child.setForeground(0, QColor(theme_color("error")))
                             child.setToolTip(0, cycle.outlier_reason or cycle.warning or "无效循环")
                         checked = chosen is None or cycle.index in chosen
                         child.setCheckState(0, Qt.Checked if checked else Qt.Unchecked)
@@ -304,6 +308,12 @@ class PlotDataDialog(QDialog):
         self._updating = True
         checked_count = len(self._checked_run_ids())
         file_numbers = dataset_file_numbers(self.dataset)
+        resolved_labels = resolve_legend_labels(
+            self.dataset.all_runs(),
+            spec=self.spec,
+            file_numbers=file_numbers,
+            text_values=self._text_values,
+        )
         try:
             for run in self._runs():
                 item = self._run_items.get(run.run_id)
@@ -329,14 +339,16 @@ class PlotDataDialog(QDialog):
                 first_number = first_cycle.index if first_cycle is not None else None
                 if first_cycle is not None and self.spec.renumber_cycles:
                     first_number = selected_numbers.get(first_cycle.index, first_cycle.index)
+                resolved = resolved_labels.get(run.run_id)
+                run_label = resolved.label if resolved is not None else run.legend_name
                 if first_cycle is not None:
                     fallback = (
                         f"Cycle {first_number}"
                         if checked_count <= 1
-                        else run.legend_name
+                        else run_label
                     )
                 else:
-                    fallback = run.legend_name
+                    fallback = run_label
                 if template and first_cycle is not None and template_uses_cycle(template):
                     label, unknown = render_legend_template(
                         template,
@@ -360,9 +372,9 @@ class PlotDataDialog(QDialog):
                     )
                 if unknown:
                     label += "  （未知字段: " + "、".join("{" + token + "}" for token in unknown) + "）"
-                    item.setForeground(2, QColor("#a33"))
+                    item.setForeground(2, QColor(theme_color("error")))
                 else:
-                    item.setForeground(2, QColor("#263238"))
+                    item.setForeground(2, QColor(theme_color("text")))
                 item.setText(2, label)
                 item.setToolTip(
                     2,
@@ -394,7 +406,12 @@ class PlotDataDialog(QDialog):
                             "{" + token + "}" for token in child_unknown
                         ) + "）"
                     child.setText(2, child_label)
-                    child.setForeground(2, QColor("#a33" if child_unknown else "#546e7a"))
+                    child.setForeground(
+                        2,
+                        QColor(
+                            theme_color("error" if child_unknown else "muted_strong")
+                        ),
+                    )
         finally:
             self._updating = False
 

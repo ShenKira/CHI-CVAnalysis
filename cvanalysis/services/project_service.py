@@ -87,6 +87,7 @@ def save_project(
                     "mass_mg": run.params.mass_mg,
                 },
                 "legend_template": run.legend_template,
+                "legend_alias": run.legend_alias,
                 "data": embedded,
             }
         )
@@ -198,7 +199,7 @@ def load_project(path: str | Path) -> ProjectState:
             warnings.append(f"未找到项目中的数据: {entry.get('source', '')}")
             continue
         old_id = entry.get("run_id", "")
-        entry_keys = {"run_id", "kind", "source", "run_index", "name", "visible", "cycles", "params", "legend_template", "data"}
+        entry_keys = {"run_id", "kind", "source", "run_index", "name", "visible", "cycles", "params", "legend_template", "legend_alias", "data"}
         run._project_entry_extra = {k: v for k, v in entry.items() if k not in entry_keys}
         old_to_new[old_id] = run.run_id
         visible[run.run_id] = bool(entry.get("visible", True))
@@ -208,6 +209,10 @@ def load_project(path: str | Path) -> ProjectState:
         params = entry.get("params") or {}
         run.params = ElectrodeParams(params.get("area_cm2"), params.get("mass_mg"))
         run.legend_template = str(entry.get("legend_template") or "")
+        alias = entry.get("legend_alias")
+        if alias is None and isinstance(entry.get("data"), dict):
+            alias = entry["data"].get("legend_alias")
+        run.legend_alias = str(alias or "")
         if entry.get("name"):
             run.name = entry["name"]
 

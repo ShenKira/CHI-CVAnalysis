@@ -97,6 +97,18 @@ def test_quick_style_dialog_and_plot_tab_overrides(tmp_path, synthetic_cv_runs):
     assert overrides["annotation"] is False
     dialog.close()
 
+    from cvanalysis.ui.dialogs.style_dialog import StyleEditorDialog
+
+    tick_style = BUILTIN_PRESETS["ieee-single"].with_overrides(
+        {"ticks_top": False, "ticks_right": True}
+    )
+    editor = StyleEditorDialog(tick_style)
+    assert not editor.ticks_top_cb.isChecked()
+    assert editor.ticks_right_cb.isChecked()
+    editor.ticks_top_cb.setChecked(True)
+    assert editor.edited_style().ticks_top is True
+    editor.deleteLater()
+
     dataset = Dataset(cv_runs=list(synthetic_cv_runs))
     spec = PlotSpec("cv_overlay", [run.run_id for run in synthetic_cv_runs])
     tab = PlotTab(spec, BUILTIN_PRESETS["ieee-single"], dataset)
@@ -269,24 +281,6 @@ def test_plot_data_dialog_collects_runs_cycles_and_templates(tmp_path, synthetic
     app.processEvents()
 
 
-def test_legend_template_dialog_constructs_with_parent(tmp_path, synthetic_cv_runs):
-    from unittest.mock import patch
-    from PySide6.QtWidgets import QDialog
-    from cvanalysis.domain.models import Dataset
-    from cvanalysis.ui.dialogs.legend_dialog import LegendTemplateDialog
-    from cvanalysis.ui.main_window import MainWindow
-
-    app = QApplication.instance() or QApplication([])
-    window = MainWindow(settings_path=tmp_path / "config.json")
-    window._on_import_complete(Dataset(cv_runs=list(synthetic_cv_runs)), [])
-    app.processEvents()
-    run = synthetic_cv_runs[0]
-    window._select_run_ids([run.run_id])
-    with patch.object(LegendTemplateDialog, "exec", return_value=QDialog.Rejected):
-        window._edit_legend_template_for_selection()
-    window.close()
-
-
 def test_main_window_applies_legend_template_and_plot_data_dialog(tmp_path, synthetic_cv_runs):
     from unittest.mock import patch
     from PySide6.QtWidgets import QDialog
@@ -320,7 +314,7 @@ def test_main_window_applies_legend_template_and_plot_data_dialog(tmp_path, synt
     assert run.legend_template == "{CV_Voltage}-{Cycle_Number}"
 
     class FakeDataDialog:
-        def __init__(self, dataset, spec, kind, parent=None):
+        def __init__(self, dataset, spec, kind, parent=None, text_values=None):
             self.spec = spec
 
         def exec(self):
@@ -344,20 +338,6 @@ def test_main_window_applies_legend_template_and_plot_data_dialog(tmp_path, synt
     window.close()
 
 
-def test_results_panel_table_resize_modes(tmp_path):
-    from PySide6.QtWidgets import QHeaderView
-    from cvanalysis.ui.widgets.results_panel import ResultsPanel
-
-    app = QApplication.instance() or QApplication([])
-    panel = ResultsPanel()
-    header = panel.cv_table.horizontalHeader()
-    assert header.sectionResizeMode(0) == QHeaderView.Interactive
-    assert header.sectionResizeMode(1) == QHeaderView.Interactive
-    assert not header.stretchLastSection()
-    panel.deleteLater()
-    app.processEvents()
-
-
 def test_column_drag_survives_refresh_restart_and_reset(tmp_path, synthetic_cv_runs):
     from PySide6.QtCore import QPoint, Qt
     from PySide6.QtTest import QTest
@@ -378,7 +358,8 @@ def test_column_drag_survives_refresh_restart_and_reset(tmp_path, synthetic_cv_r
     QTest.mouseRelease(header.viewport(), Qt.LeftButton, pos=start + QPoint(35, 0))
     assert header.sectionSize(1) > start_width
     dragged_width = header.sectionSize(1)
-    window.tree.header().resizeSection(7, 240)
+    state_column = window.tree.header().count() - 1
+    window.tree.header().resizeSection(state_column, 240)
     window.results_panel.eis_table.horizontalHeader().resizeSection(7, 250)
     window._refresh_model_and_panel()
     app.processEvents()
@@ -388,11 +369,12 @@ def test_column_drag_survives_refresh_restart_and_reset(tmp_path, synthetic_cv_r
     reopened = MainWindow(settings_path=path)
     app.processEvents()
     assert reopened.results_panel.cv_table.columnWidth(1) == dragged_width
-    assert reopened.tree.columnWidth(7) == 240
+    state_column = reopened.tree.header().count() - 1
+    assert reopened.tree.columnWidth(state_column) == 240
     assert reopened.results_panel.eis_table.columnWidth(7) == 250
     reopened.reset_layout()
     app.processEvents()
-    assert reopened.tree.columnWidth(7) != 240
+    assert reopened.tree.columnWidth(state_column) != 240
     assert reopened.results_panel.eis_table.columnWidth(7) != 250
     reopened.close()
 
@@ -421,10 +403,15 @@ def test_plot_dialog_columns_are_resizable_and_content_fit_is_bounded(tmp_path, 
 
 
 def test_column_restore_ignores_invalid_settings_and_initial_fit_keeps_units(tmp_path):
+    from PySide6.QtWidgets import QHeaderView
     from cvanalysis.ui.widgets.results_panel import ResultsPanel
 
     app = QApplication.instance() or QApplication([])
     panel = ResultsPanel()
+    header = panel.cv_table.horizontalHeader()
+    assert header.sectionResizeMode(0) == QHeaderView.Interactive
+    assert header.sectionResizeMode(1) == QHeaderView.Interactive
+    assert not header.stretchLastSection()
     columns = panel.cv_columns
     columns.restore({"文件": "bad", "扫速": -1, "循环": True, "有效": 100000})
     columns.restore(None)

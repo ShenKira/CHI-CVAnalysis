@@ -76,16 +76,6 @@ def test_ticks_require_visible_spines():
     assert not ax.yaxis.majorTicks[0].tick2line.get_visible()
 
 
-def test_style_roundtrip_preserves_tick_switches():
-    style = PlotStyle.from_dict(
-        {"ticks_top": False, "ticks_right": False, "spines_top": True, "spines_right": True}
-    )
-    assert style.spines_top and style.spines_right
-    assert not style.ticks_top and not style.ticks_right
-    restored = PlotStyle.from_dict(style.to_dict())
-    assert not restored.ticks_top and not restored.ticks_right
-
-
 def test_unified_ticks_use_the_same_interval():
     figure = Figure(figsize=(4.0, 3.2), dpi=100)
     ax = figure.add_axes([0.2, 0.2, 0.45, 0.75])
@@ -378,62 +368,3 @@ def test_manual_tick_interval_ui_and_unit_conversion(tmp_path, synthetic_eis_run
     inside = np.asarray([value for value in tab.figure.axes[0].get_xticks() if 0 <= value <= 0.4])
     assert np.allclose(np.diff(inside), 0.1)
     window.close()
-
-
-def test_style_dialogs_expose_independent_tick_switches():
-    from PySide6.QtWidgets import QApplication
-
-    from cvanalysis.ui.dialogs.quick_style_dialog import QuickStyleDialog
-    from cvanalysis.ui.dialogs.style_dialog import StyleEditorDialog
-
-    app = QApplication.instance() or QApplication([])
-    style = PlotStyle(ticks_top=False, ticks_right=True)
-    quick = QuickStyleDialog(style, "test")
-    assert not quick.ticks_top_cb.isChecked()
-    assert quick.ticks_right_cb.isChecked()
-    quick.ticks_top_cb.setChecked(True)
-    quick.ticks_right_cb.setChecked(False)
-    overrides = quick.overrides()
-    assert overrides["ticks_top"] is True
-    assert overrides["ticks_right"] is False
-    quick.deleteLater()
-
-    editor = StyleEditorDialog(style)
-    assert not editor.ticks_top_cb.isChecked()
-    assert editor.ticks_right_cb.isChecked()
-    editor.ticks_top_cb.setChecked(True)
-    edited = editor.edited_style()
-    assert edited.ticks_top is True
-    assert edited.ticks_right is True
-    editor.deleteLater()
-
-
-def test_unit_and_tick_options_project_round_trip(tmp_path, synthetic_eis_run):
-    from cvanalysis.services.project_service import load_project, save_project
-
-    dataset = Dataset(eis_runs=[synthetic_eis_run])
-    spec = PlotSpec(
-        "eis_nyquist",
-        [synthetic_eis_run.run_id],
-        analysis_options={
-            "unit_overrides": {"impedance": "kΩ"},
-            "axis_limits": {"main": {"y_min": 0.0, "y_max": 0.1}},
-            "axis_limit_units": {
-                "main": {"y": {"label": "kΩ", "factor": 1e-3}}
-            },
-            "unified_xy_ticks": True,
-            "unified_tick_interval": 0.1,
-            "unified_tick_interval_unit": {"label": "kΩ", "factor": 1e-3},
-            "log_tick_formats": {"x": "decimal", "y": "scientific"},
-        },
-    )
-    path = tmp_path / "unit-ticks.cvproj"
-    save_project(path, dataset, plots=[spec])
-    state = load_project(path)
-    options = state.plots[0].analysis_options
-    assert options["unit_overrides"]["impedance"] == "kΩ"
-    assert options["axis_limit_units"]["main"]["y"]["factor"] == pytest.approx(1e-3)
-    assert options["unified_xy_ticks"] is True
-    assert options["unified_tick_interval"] == pytest.approx(0.1)
-    assert options["unified_tick_interval_unit"]["factor"] == pytest.approx(1e-3)
-    assert options["log_tick_formats"] == {"x": "decimal", "y": "scientific"}

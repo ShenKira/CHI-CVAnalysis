@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from cvanalysis.analysis.fitting import available_models
 from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun
+from cvanalysis.ui.theme import apply_theme_role
 
 
 class AnalysisPanel(QWidget):
@@ -50,7 +51,7 @@ class AnalysisPanel(QWidget):
 
         self.info_label = QLabel("尚未导入数据")
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #546e7a;")
+        apply_theme_role(self.info_label, "muted")
         layout.addWidget(self.info_label)
 
         self.normalization_combo = QComboBox()
@@ -150,7 +151,7 @@ class AnalysisPanel(QWidget):
         eis_layout.addLayout(freq_row)
         self.frequency_error = QLabel()
         self.frequency_error.setWordWrap(True)
-        self.frequency_error.setStyleSheet("color: #a33")
+        apply_theme_role(self.frequency_error, "error")
         eis_layout.addWidget(self.frequency_error)
 
         self.fit_model_combo = QComboBox()
@@ -202,7 +203,7 @@ class AnalysisPanel(QWidget):
         cp_hint = QLabel("恒流充放电：GCD 曲线可按文件中的保持段电流自动补全高/低电位平台。")
         cp_hint.setWordWrap(True)
         cp_hint.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        cp_hint.setStyleSheet("color: #607d8b;")
+        apply_theme_role(cp_hint, "hint")
         cp_layout.addWidget(cp_hint)
         self.complete_holds_cb = QCheckBox("电位-时间自动补全保持区间")
         self.complete_holds_cb.setChecked(True)

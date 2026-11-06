@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from cvanalysis.plotting.colors import detect_figure_colors
+from cvanalysis.ui.theme import apply_theme_role
 
 if TYPE_CHECKING:
     from cvanalysis.ui.widgets.plot_tab import PlotTab
@@ -43,10 +44,10 @@ class PlotColorPanel(QWidget):
 
         header = QHBoxLayout()
         title = QLabel("绘图颜色")
-        title.setStyleSheet("font-weight: 600; color: #263238;")
+        apply_theme_role(title, "title")
         header.addWidget(title)
         self.info = QLabel("当前没有图")
-        self.info.setStyleSheet("color: #607d8b;")
+        apply_theme_role(self.info, "hint")
         self.info.setWordWrap(True)
         self.info.setMinimumWidth(0)
         header.addWidget(self.info, 1)
@@ -99,13 +100,8 @@ class PlotColorPanel(QWidget):
             button.setFixedSize(26, 26)
             button.setCursor(Qt.PointingHandCursor)
             button.setToolTip(f"{color}；点击修改")
-            button.setStyleSheet(
-                "QPushButton {"
-                f"background: {color};"
-                "border: 1px solid #607d8b;"
-                "border-radius: 4px;"
-                "}"
-            )
+            apply_theme_role(button, "color-swatch")
+            button.setStyleSheet(f"background: {color};")
             button.clicked.connect(lambda checked=False, value=color: self._choose_color(value))
             self._swatches_layout.addWidget(button)
         self._swatches_layout.addStretch(1)

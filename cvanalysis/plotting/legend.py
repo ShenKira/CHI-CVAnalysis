@@ -6,8 +6,10 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
-from cvanalysis.domain.models import CPRun, CVRun, EISRun
+from cvanalysis.domain.models import CPRun, CVRun, EISRun, abbreviate_name
+from cvanalysis.plotting.texts import text_from_values
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ LEGEND_TOKENS: tuple[LegendToken, ...] = (
     LegendToken("cycle_n", "文件内循环号", "当前 CV 文件内的原始循环号，不受循环重编号影响", "cv"),
     LegendToken("File_Name", "文件名", "源文件名（不含扩展名）"),
     LegendToken("Sample_Name", "数据名称", "导入时显示的数据名称"),
+    LegendToken("Alias", "图例别名", "手动设置的图例别名；未设置时为空"),
     LegendToken("Run_Index", "序号", "同一文件内数据的序号，从 1 开始"),
     LegendToken("CV_Voltage", "CV 上限电位", "CV 上限电位，例如 1.5V", "cv"),
     LegendToken("CV_Low", "CV 下限电位", "CV 下限电位", "cv"),
@@ -143,6 +146,15 @@ def dataset_file_numbers(dataset) -> dict[str, int]:
     )
 
 
+def dataset_runs(dataset) -> list[CVRun | EISRun | CPRun]:
+    """All runs from a Dataset or a lightweight duck-typed test dataset."""
+    return [
+        *getattr(dataset, "cv_runs", []),
+        *getattr(dataset, "eis_runs", []),
+        *getattr(dataset, "cp_runs", []),
+    ]
+
+
 def _format_number(value: float | None, unit: str = "") -> str:
     if value is None:
         return ""
@@ -161,6 +173,7 @@ def _context(run: CVRun | EISRun | CPRun, cycle=None, cycle_number: int | None =
     values: dict[str, str] = {
         "file_name": source_name,
         "sample_name": run.display_name,
+        "alias": str(getattr(run, "legend_alias", "") or "").strip(),
         "run_index": str(run.run_index + 1),
         "file_n": str(file_number) if file_number is not None else "",
         "area_cm2": _format_number(run.params.area_cm2, "cm²"),
@@ -274,3 +287,189 @@ def preview_label(
         if fallback is not None:
             return fallback, unknown
     return (fallback if fallback is not None else default_run_label(run)), []
+
+
+@dataclass(frozen=True)
+class ResolvedLegendLabel:
+    """The automatic default label for one run/legend entry."""
+
+    label: str
+    manual: bool = False
+    auto: bool = False
+    compact: bool = False
+
+
+def default_filename_label(run: CVRun | EISRun | CPRun) -> str:
+    """Default filename label, before any similarity-aware compaction."""
+    return abbreviate_name(run.display_name, 26)
+
+
+def _longest_common_prefix(values: Iterable[str]) -> str:
+    items = [str(value or "") for value in values]
+    if not items:
+        return ""
+    prefix = items[0]
+    for value in items[1:]:
+        while prefix and not value.startswith(prefix):
+            prefix = prefix[:-1]
+        if not prefix:
+            break
+    return prefix
+
+
+def _similar_names(first: str, second: str) -> bool:
+    first = str(first or "")
+    second = str(second or "")
+    if not first or not second:
+        return False
+    shorter = min(len(first), len(second))
+    if shorter < 6:
+        return False
+    prefix = _longest_common_prefix([first, second])
+    if len(prefix) >= max(10, int(0.4 * shorter)):
+        return True
+    return SequenceMatcher(None, first, second).ratio() >= 0.82
+
+
+def similar_name_families(
+    runs: Iterable[CVRun | EISRun | CPRun],
+) -> list[list[CVRun | EISRun | CPRun]]:
+    """Group same-kind runs whose file names share a meaningful stem."""
+    ordered = list(runs)
+    parents = list(range(len(ordered)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for left in range(len(ordered)):
+        for right in range(left + 1, len(ordered)):
+            if type(ordered[left]) is not type(ordered[right]):
+                continue
+            if _similar_names(ordered[left].display_name, ordered[right].display_name):
+                union(left, right)
+
+    families: dict[int, list[CVRun | EISRun | CPRun]] = {}
+    for index, run in enumerate(ordered):
+        families.setdefault(find(index), []).append(run)
+    return list(families.values())
+
+
+def _family_needs_compact(family: Iterable[CVRun | EISRun | CPRun]) -> bool:
+    runs = list(family)
+    if len(runs) < 2:
+        return False
+    names = [run.display_name for run in runs]
+    if max((len(name) for name in names), default=0) > 24:
+        return True
+    labels = [default_filename_label(run) for run in runs]
+    return len(set(labels)) < len(labels)
+
+
+def _compact_template_key(run: CVRun | EISRun | CPRun) -> str:
+    if isinstance(run, CVRun):
+        return "legend.cv_compact"
+    if isinstance(run, CPRun):
+        return "legend.cp_compact"
+    return "legend.eis_compact"
+
+
+def _compact_label(
+    run: CVRun | EISRun | CPRun,
+    *,
+    spec=None,
+    file_number: int | None = None,
+    text_values: dict | None = None,
+) -> str:
+    values = text_values
+    if values is None and spec is not None:
+        values = getattr(spec, "_cv_text_values", None)
+    template = text_from_values(values, _compact_template_key(run))
+    label, unknown = render_legend_template(
+        template,
+        run,
+        file_number=file_number,
+    )
+    if unknown or not label.strip():
+        return default_filename_label(run)
+    return label.strip()
+
+
+def resolve_legend_labels(
+    runs: Iterable[CVRun | EISRun | CPRun],
+    *,
+    spec=None,
+    file_numbers: dict[str, int] | None = None,
+    text_values: dict | None = None,
+) -> dict[str, ResolvedLegendLabel]:
+    """Resolve automatic labels for a group of runs.
+
+    Rules, in order: manual alias, similar-name compact mode, long-filename
+    abbreviation, plain filename. Duplicate automatic labels receive a short
+    file/run suffix so a legend never silently collapses two series.
+    """
+    ordered = list(runs)
+    if not ordered:
+        return {}
+    numbers = file_numbers if file_numbers is not None else file_numbers_for_runs(ordered)
+    compact_ids: set[str] = set()
+    for family in similar_name_families(ordered):
+        if _family_needs_compact(family):
+            compact_ids.update(run.run_id for run in family)
+
+    result: dict[str, ResolvedLegendLabel] = {}
+    for run in ordered:
+        alias = str(getattr(run, "legend_alias", "") or "").strip()
+        if alias:
+            result[run.run_id] = ResolvedLegendLabel(alias, manual=True)
+        elif run.run_id in compact_ids:
+            result[run.run_id] = ResolvedLegendLabel(
+                _compact_label(
+                    run,
+                    spec=spec,
+                    file_number=numbers.get(run.run_id),
+                    text_values=text_values,
+                ),
+                auto=True,
+                compact=True,
+            )
+        else:
+            label = default_filename_label(run)
+            result[run.run_id] = ResolvedLegendLabel(
+                label,
+                auto=len(run.display_name) > 26,
+            )
+
+    # Seed manual aliases first so an automatic label cannot take a manual
+    # alias's exact text depending on dataset order.  Manual aliases themselves
+    # are left verbatim; users are responsible for making them unique.
+    used: set[str] = {
+        decision.label for decision in result.values() if decision.manual
+    }
+    for run in ordered:
+        decision = result[run.run_id]
+        label = decision.label
+        if label in used and not decision.manual:
+            file_number = numbers.get(run.run_id)
+            suffix = f" #{file_number}" if file_number is not None else f" #{run.run_index + 1}"
+            candidate = label + suffix
+            counter = 2
+            while candidate in used:
+                candidate = f"{label}{suffix} ({counter})"
+                counter += 1
+            result[run.run_id] = ResolvedLegendLabel(
+                candidate,
+                manual=decision.manual,
+                auto=True,
+                compact=decision.compact,
+            )
+            label = candidate
+        used.add(label)
+    return result

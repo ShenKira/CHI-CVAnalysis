@@ -23,7 +23,13 @@ from cvanalysis.domain.units import (
 )
 from cvanalysis.plotting.axis_limits import set_axis_display_units
 from cvanalysis.plotting.colors import resolve_color_cycle
-from cvanalysis.plotting.legend import dataset_file_numbers, effective_template, preview_label
+from cvanalysis.plotting.legend import (
+    dataset_file_numbers,
+    dataset_runs,
+    effective_template,
+    preview_label,
+    resolve_legend_labels,
+)
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
 from cvanalysis.plotting.texts import axis_text, plot_text
@@ -108,11 +114,19 @@ def _resolve_normalization(
     return normalization
 
 
-def _legend_label(run: EISRun, spec: PlotSpec, warnings: list[str], *, file_number=None) -> str:
+def _legend_label(
+    run: EISRun,
+    spec: PlotSpec,
+    warnings: list[str],
+    *,
+    file_number=None,
+    default_label: str | None = None,
+) -> str:
+    fallback = default_label or run.legend_name
     template = effective_template(run, spec)
     if not template:
-        return run.legend_name
-    label, unknown = preview_label(run, template, file_number=file_number, fallback=run.legend_name)
+        return fallback
+    label, unknown = preview_label(run, template, file_number=file_number, fallback=fallback)
     for token in unknown:
         message = f"图例模板包含未知字段: {{{token}}}"
         if message not in warnings:
@@ -342,12 +356,22 @@ def draw_nyquist(
     metrics = metrics or {}
 
     file_numbers = dataset_file_numbers(dataset)
+    resolved_labels = resolve_legend_labels(
+        dataset_runs(dataset), spec=spec, file_numbers=file_numbers
+    )
     x_series: list[np.ndarray] = []
     y_series: list[np.ndarray] = []
     for index, run in enumerate(runs):
         real, imag, _ = _z_values(run, normalization)
         color = colors[index % len(colors)]
-        label = _legend_label(run, spec, warnings, file_number=file_numbers.get(run.run_id))
+        resolved = resolved_labels.get(run.run_id)
+        label = _legend_label(
+            run,
+            spec,
+            warnings,
+            file_number=file_numbers.get(run.run_id),
+            default_label=resolved.label if resolved is not None else None,
+        )
         x_display = real * factor
         y_display = -imag * factor
         x_series.append(x_display)
@@ -435,13 +459,23 @@ def draw_bode(
     metrics = metrics or {}
 
     file_numbers = dataset_file_numbers(dataset)
+    resolved_labels = resolve_legend_labels(
+        dataset_runs(dataset), spec=spec, file_numbers=file_numbers
+    )
     for index, run in enumerate(runs):
         order = np.argsort(run.freq)
         freq = run.freq[order]
         phase = run.phase[order]
         _, _, mag = _z_values(run, normalization)
         color = colors[index % len(colors)]
-        label = _legend_label(run, spec, warnings, file_number=file_numbers.get(run.run_id))
+        resolved = resolved_labels.get(run.run_id)
+        label = _legend_label(
+            run,
+            spec,
+            warnings,
+            file_number=file_numbers.get(run.run_id),
+            default_label=resolved.label if resolved is not None else None,
+        )
         ax_phase.semilogx(freq, phase, "-", color=color, linewidth=style.line_width, label=label)
         ax_mag.loglog(freq, mag[order] * factor, "-", color=color, linewidth=style.line_width, label=label)
         metric = metrics.get(run.run_id)
@@ -512,13 +546,23 @@ def draw_fit(
     ax = figure.add_subplot(2, 1, 1)
     ax_res = figure.add_subplot(2, 1, 2)
     file_numbers = dataset_file_numbers(dataset)
+    resolved_labels = resolve_legend_labels(
+        dataset_runs(dataset), spec=spec, file_numbers=file_numbers
+    )
     x_series: list[np.ndarray] = []
     y_series: list[np.ndarray] = []
     for index, run in enumerate(available):
         fit = fits[run.run_id]
         real, imag, _ = _z_values(run, normalization)
         color = colors[index % len(colors)]
-        label = _legend_label(run, spec, warnings, file_number=file_numbers.get(run.run_id))
+        resolved = resolved_labels.get(run.run_id)
+        label = _legend_label(
+            run,
+            spec,
+            warnings,
+            file_number=file_numbers.get(run.run_id),
+            default_label=resolved.label if resolved is not None else None,
+        )
         x_display = real * factor
         y_display = -imag * factor
         x_series.append(x_display)

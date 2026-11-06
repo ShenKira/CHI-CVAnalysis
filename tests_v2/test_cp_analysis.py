@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import os
-from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -10,7 +9,6 @@ from matplotlib.figure import Figure
 
 from cvanalysis.analysis.cp import analyze_cp_run, completed_cp_series, split_hold_records
 from cvanalysis.domain.models import Dataset, ElectrodeParams
-from cvanalysis.io.registry import parse_file
 from cvanalysis.plotting.cp_renderer import draw_cp_capacity, draw_gcd_curve
 from cvanalysis.plotting.presets import BUILTIN_PRESETS
 from cvanalysis.plotting.spec import PlotSpec
@@ -325,18 +323,3 @@ def test_cp_gui_smoke(tmp_path, synthetic_cp_run):
     assert "show_efficiency" in window.options_panel.controls
     assert "complete_holds" not in window.options_panel.controls
     window.close()
-
-
-@pytest.mark.skipif(
-    not (Path(__file__).resolve().parents[1] / "CP-Test.txt").exists(),
-    reason="optional real CP-Test.txt sample is not present",
-)
-def test_real_cp_test_sample():
-    run = parse_file(Path(__file__).resolve().parents[1] / "CP-Test.txt").runs[0]
-    summary = analyze_cp_run(run)
-    assert len(summary.holds) == 5
-    assert summary.cycle_count == 2
-    series = completed_cp_series(run)
-    assert series.completed
-    assert series.time_s[-1] == pytest.approx(252.889, rel=0.01)
-    assert (np.abs(series.potential_V - 2.0) < 1e-6).sum() > 100

@@ -30,6 +30,7 @@ from cvanalysis.plotting.texts import (
     compact_text_enabled,
     default_axis_text,
 )
+from cvanalysis.ui.theme import apply_theme_role
 from cvanalysis.ui.widgets.plot_color_panel import PlotColorPanel
 
 
@@ -70,7 +71,7 @@ class PlotInspectorDialog(QDialog):
 
         info = QLabel("当前页只修改本图；点击关闭后可直接 Ctrl+S 保存到项目。")
         info.setWordWrap(True)
-        info.setStyleSheet("color: #607d8b;")
+        apply_theme_role(info, "hint")
         layout.addWidget(info)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
@@ -165,7 +166,7 @@ class PlotInspectorDialog(QDialog):
             "每图标签覆盖保存在项目中。"
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #607d8b;")
+        apply_theme_role(hint, "hint")
         group_layout.addWidget(hint)
         self.axis_label_edits: dict[str, dict[str, QLineEdit]] = {}
         self.axis_label_status: dict[str, dict[str, QLabel]] = {}
@@ -193,7 +194,7 @@ class PlotInspectorDialog(QDialog):
                 status = QLabel("")
                 status.setMinimumWidth(52)
                 status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                status.setStyleSheet("color: #a33;")
+                apply_theme_role(status, "error")
                 row_widget = QWidget()
                 row = QHBoxLayout(row_widget)
                 row.setContentsMargins(0, 0, 0, 0)

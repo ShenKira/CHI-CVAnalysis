@@ -7,12 +7,22 @@ from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QMenu, QTableView
 class ViewColumns(QObject):
     """Keep every column draggable; fit once and preserve subsequent adjustments."""
 
-    def __init__(self, view, *, first_width=230, maximum_fit_width=320):
+    def __init__(
+        self,
+        view,
+        *,
+        first_width=230,
+        maximum_fit_width=320,
+        default_widths: dict[str, int] | None = None,
+        minimum_widths: dict[str, int] | None = None,
+    ):
         super().__init__(view)
         self.view = view
         self.header = view.horizontalHeader() if isinstance(view, QTableView) else view.header()
         self.first_width = first_width
         self.maximum_fit_width = maximum_fit_width
+        self.default_widths = dict(default_widths or {})
+        self.minimum_widths = dict(minimum_widths or {})
         self._initialized = False
         view.setTextElideMode(Qt.ElideRight)
         view.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
@@ -41,13 +51,18 @@ class ViewColumns(QObject):
             # A long filename should not consume the entire results panel on first load.
             self.header.resizeSection(0, self.first_width)
 
+    def _header_name(self, column: int) -> str:
+        return str(self.view.model().headerData(column, Qt.Horizontal) or "")
+
     def fit_column(self, column):
         if column < 0:
             return
         self.view.resizeColumnToContents(column)
         width = self.header.sectionSize(column)
+        minimum = self.minimum_widths.get(self._header_name(column), 0)
         if column == 0:
             width = max(width, self.first_width)
+        width = max(width, minimum)
         self.header.resizeSection(column, min(self.maximum_fit_width, width))
 
     def fit_all(self):
@@ -57,7 +72,9 @@ class ViewColumns(QObject):
 
     def reset(self):
         for column in range(self.header.count()):
-            self.header.resizeSection(column, self.first_width if column == 0 else 110)
+            name = self._header_name(column)
+            default = self.default_widths.get(name, self.first_width if column == 0 else 110)
+            self.header.resizeSection(column, default)
         self._initialized = False
         self.fit_initial()
 
