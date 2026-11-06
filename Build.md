@@ -1,6 +1,6 @@
 # CVAnalysis v2 Build 交接说明
 
-> 状态（2026-11-06）：v2.0.2 源码已发布，StandAlone / OneFile 构建结果在本文件后续补充。
+> 状态（2026-11-06）：v2.0.2 的 **StandAlone** 与 **OneFile** 均已构建成功并通过启动验证。
 > 本文记录已验证环境、关键根因、构建命令和验证方法，供下一位接手构建/发布的 Agent 或开发者使用。
 
 ## 1. 已验证产物
@@ -9,11 +9,14 @@
 
 | 产物 | 路径 | 大小 | SHA256 |
 | --- | --- | ---: | --- |
-| StandAlone | `CVAnalysis_StandAlone_v2.0.2\start_gui.dist\CVAnalysis_v2.0.2.exe` | 构建后填写 | 构建后填写 |
-| OneFile | `CVAnalysis_OneFile_v2.0.2\CVAnalysis_v2.0.2.exe` | 构建后填写 | 构建后填写 |
+| StandAlone | `CVAnalysis_StandAlone_v2.0.2\start_gui.dist\CVAnalysis_v2.0.2.exe` | 126,932,480 | `CA910960CD77BA87918D55EC9BB570E60275A87F521A5377CF2F090DC18C7CED` |
+| OneFile | `CVAnalysis_OneFile_v2.0.2\CVAnalysis_v2.0.2.exe` | 336,658,432 | `A13656ED04AAA45CD79106A425C9846872F2CC8D80747F4D3575E60C9DD0665E` |
 
-- 文件版本资源：`2.0.2.0`（StandAlone / OneFile 均需验证）。
-- 构建日志：`build_cache\logs\build_v2.0.2_*.log`（本地忽略，不提交）。
+- 文件版本资源：`2.0.2.0`（StandAlone / OneFile 均验证）。
+- 离屏 StandAlone 启动到 `WaitForInputIdle`：约 4.84 s，随后保持运行。
+- OneFile 冷启动：解压目录 `%TEMP%\CVAnalysis\onefile_35440_*` 正常创建，子进程保持运行；无崩溃记录。
+- StandAlone 包含 `cvanalysis\default_themes.json` 及 `ffi.dll`、`libexpat.dll`、Qt 平台插件等关键文件。
+- 构建日志：`build_cache\logs\build_v2.0.2_20261106_202631.log`（本地忽略，不提交）；仅 Nuitka 4.3.1 版本提示，无构建错误。
 
 ### v2.0.1（历史）
 
