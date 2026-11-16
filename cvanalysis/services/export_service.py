@@ -224,6 +224,14 @@ def export_analysis_csv(
         "cp_cycles.csv": cp_cycles_frame(dataset),
         "plots.csv": plot_specs_frame(plots or []),
     }
+    for kind, runs in (("lsv", dataset.lsv_runs), ("it", dataset.it_runs)):
+        if runs:
+            x_name = "potential_V" if kind == "lsv" else "time_s"
+            tables[f"{kind}_points.csv"] = pd.DataFrame(
+                {"file": run.display_name, "source": str(run.source or ""),
+                 "point": index + 1, x_name: float(x), "current_A": float(current)}
+                for run in runs for index, (x, current) in enumerate(zip(run.x, run.current))
+            )
     for name, frame in tables.items():
         if frame.empty:
             continue

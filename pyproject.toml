@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cvanalysis"
-version = "2.0.2"
+version = "2.1.0"
 description = "Layered electrochemical CV/EIS/CP analysis workspace"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "PySide6>=6.6,<6.10",
+    "Pillow>=9.1",
     "matplotlib>=3.7",
     "numpy>=1.24",
     "scipy>=1.10",
@@ -29,6 +30,11 @@ cvanalysis = "cvanalysis.ui.app:run"
 [tool.setuptools.packages.find]
 include = ["cvanalysis*"]
 
+[tool.setuptools.package-data]
+"cvanalysis" = ["default_themes.json", "resources/icons/*.ico"]
+"cvanalysis.ui.glass" = ["PyGlass-LICENSE", "PyGlass-NOTICE.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests_v2"]
 addopts = "-q"
+cache_dir = ".test_tmp/pytest_cache"

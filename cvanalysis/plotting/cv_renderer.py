@@ -54,7 +54,7 @@ from cvanalysis.plotting.legend import (
 )
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
-from cvanalysis.plotting.texts import axis_text, compact_text_enabled, plot_text
+from cvanalysis.plotting.texts import axis_text, compact_text_enabled, plot_text, safe_format
 
 
 def _option_float(options: dict, key: str, default: float, low: float, high: float) -> float:
@@ -168,7 +168,7 @@ def _current_unit_and_factor(
 ) -> tuple[str, float, list[float]]:
     values: list[float] = []
     for run in runs:
-        for cycle in run.cycles:
+        for cycle in _selected_cycles(run, spec):
             if not cycle.valid:
                 continue
             current = normalize_current(
@@ -544,7 +544,7 @@ def draw_cv_overlay(
                 color=color,
                 label=label,
             )
-            if label is not None:
+            if label:
                 line_handles.append((label, color))
     if legend_warnings:
         warnings.extend(sorted(legend_warnings))
@@ -556,7 +556,7 @@ def draw_cv_overlay(
         axis_text(spec, "main", "y", normalization=normalization, unit=unit),
     )
     set_axis_display_units(ax, x=("V", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title or plot_text(spec, "title.cv_overlay"))
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_overlay"))
 
     if style.legend and spec.show_legend and line_handles:
         columns = style.legend_columns if len(line_handles) > 8 else 1
@@ -729,7 +729,10 @@ def draw_cap_scan(
         if normalization == "mass"
         else CAPACITANCE
     )
-    unit, factor = choose_unit_for_values(family, values, use_max=False)
+    override = _unit_override(spec, "capacitance")
+    unit, factor = resolve_unit(family, values, override, use_max=False)
+    if override and unit_factor(family, override) is None:
+        warnings.append(f"电容单位 {override} 不适用于当前归一化方式，已自动选择 {unit}")
     colors = resolve_color_cycle(style, 2, color_config)
 
     figure.clear()
@@ -813,6 +816,7 @@ def draw_cap_scan(
                 slope=slope,
                 x_term=x_term,
                 intercept=intercept,
+                unit=unit,
             )
         else:
             slope, intercept, r2 = _fit_power_law(rates, values)
@@ -822,6 +826,7 @@ def draw_cap_scan(
                 "annotation.cv_cap_scan.equation_power",
                 a=10**intercept * factor,
                 n=slope,
+                unit=unit,
             )
         fit_is_straight = (
             fit_method == "coordinate_line"
@@ -854,10 +859,11 @@ def draw_cap_scan(
     _set_labels(
         ax,
         style,
-        axis_text(spec, "main", "x", compact=compact),
+        axis_text(spec, "main", "x", compact=compact, unit="V/s"),
         axis_text(spec, "main", "y", unit=unit, compact=compact),
     )
-    _title(ax, style, spec.title or plot_text(spec, "title.cv_cap_scan"))
+    set_axis_display_units(ax, x=("V/s", 1.0), y=(unit, factor))
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_cap_scan"))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
@@ -925,7 +931,7 @@ def draw_current_scan(
         axis_text(spec, "main", "y", normalization=normalization, unit=unit),
     )
     set_axis_display_units(ax, x=("V/s", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title or plot_text(spec, "title.cv_current_scan", target=target))
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_current_scan", target=target))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
@@ -1009,7 +1015,7 @@ def draw_b_value(
         axis_text(spec, "main", "y", normalization=normalization, unit=unit),
     )
     set_axis_display_units(ax, x=("V/s", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title or plot_text(spec, "title.cv_bvalue", target=target))
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_bvalue", target=target))
     # This is a log/log chart. Keep decade labels and suppress the minor
     # scientific-notation labels that collide when the scan-rate range is
     # narrow (a common case with only a few selected runs).
@@ -1083,7 +1089,7 @@ def draw_contribution(
         axis_text(spec, "main", "y", normalization=result.normalization, unit=unit),
     )
     set_axis_display_units(ax, x=("V", 1.0), y=(unit, factor))
-    _title(ax, style, spec.title or plot_text(spec, "title.cv_contribution", scan_rate=result.scan_rate))
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_contribution", scan_rate=result.scan_rate))
     if style.annotation and spec.annotations:
         lines = [
             plot_text(spec, "annotation.cv_contribution.capacitive", pct=result.capacitive_fraction * 100),
@@ -1163,7 +1169,11 @@ def draw_trasatti(
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
     q_low = float(y_values[np.argmax(x_values)])
     fraction = intercept / q_low if q_low else float("nan")
-    unit, factor = choose_unit_for_values(charge_family(normalization), y_values, use_max=False)
+    family = charge_family(normalization)
+    override = _unit_override(spec, "charge")
+    unit, factor = resolve_unit(family, y_values, override, use_max=False)
+    if override and unit_factor(family, override) is None:
+        warnings.append(f"电荷单位 {override} 不适用于当前归一化方式，已自动选择 {unit}")
     colors = resolve_color_cycle(style, 2, color_config)
 
     figure.clear()
@@ -1174,10 +1184,11 @@ def draw_trasatti(
     _set_labels(
         ax,
         style,
-        axis_text(spec, "main", "x"),
+        axis_text(spec, "main", "x", unit="(V/s)^-1/2"),
         axis_text(spec, "main", "y", normalization=normalization, unit=unit),
     )
-    _title(ax, style, spec.title or plot_text(spec, "title.cv_trasatti"))
+    set_axis_display_units(ax, x=("(V/s)^-1/2", 1.0), y=(unit, factor))
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_trasatti"))
     if style.annotation and spec.annotations:
         lines = [
             plot_text(spec, "annotation.cv_trasatti.q_cap", q_cap=intercept * factor, unit=unit),
@@ -1236,6 +1247,7 @@ def draw_contribution_vs_rate(
     ax.set_xticks(positions)
     ax.set_xticklabels([f"{rate:g}" for rate in rates])
     ax.set_ylim(0.0, 100.0)
+    set_axis_display_units(ax, y=("%", 1.0))
     if len(rates) > 6:
         ax.tick_params(axis="x", labelrotation=45)
         for label in ax.get_xticklabels():
@@ -1246,7 +1258,7 @@ def draw_contribution_vs_rate(
         axis_text(spec, "main", "x"),
         axis_text(spec, "main", "y"),
     )
-    _title(ax, style, spec.title or plot_text(spec, "title.cv_contribution_vs_rate"))
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_contribution_vs_rate"))
 
     if style.annotation and spec.annotations:
         for position, cap_value, diff_value in zip(positions, capacitive, diffusive):

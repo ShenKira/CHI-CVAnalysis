@@ -26,7 +26,7 @@ def test_fixed_bottom_panel_clear_and_layout_restore(tmp_path, synthetic_cv_runs
     assert not panel.isWindow()
     assert window.dockWidgetArea(window.log_dock) == Qt.BottomDockWidgetArea
     assert window.log_dock.features() == QDockWidget.NoDockWidgetFeatures
-    assert window.log_dock.height() >= 300
+    assert window.log_dock.height() >= 220
     assert window.bottom_splitter.widget(2) is panel
     window.bottom_splitter.setSizes([430, 700, 580])
     app.processEvents()
@@ -63,12 +63,12 @@ def test_legacy_dock_layout_state_is_ignored_without_losing_config(tmp_path):
 
         window = MainWindow(settings_path=path)
         window.show()
-        QTimer.singleShot(50, app.quit)
-        assert app.exec() == 0
+        from PySide6.QtTest import QTest
+        QTest.qWait(80)
         assert window.dockWidgetArea(window.log_dock) == Qt.BottomDockWidgetArea
         window.close()
         saved = json.loads(path.read_text(encoding="utf-8"))
-        assert saved["ui"]["bottom_layout_version"] == 4
+        assert saved["ui"]["bottom_layout_version"] == 5
         assert saved["ui"]["window_state"] is None
         if version == 2:
             assert saved["ui"]["column_widths"]["dataset"]["名称"] == 222

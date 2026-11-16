@@ -13,6 +13,7 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
+from shiboken6 import isValid
 
 from cvanalysis.domain.models import Dataset
 from cvanalysis.plotting.spec import PlotSpec
@@ -274,10 +275,10 @@ def test_background_task_keeps_ui_alive_and_close_waits(tmp_path):
     for _ in range(200):
         QTest.qWait(10)
         app.processEvents()
-        if not window._tasks:
+        if not isValid(window) or not window._tasks:
             break
-    assert not window._tasks
-    assert not window.isVisible()
+    assert not isValid(window) or not window._tasks
+    assert not isValid(window) or not window.isVisible()
     assert not applied
 
 

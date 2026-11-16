@@ -2,6 +2,7 @@
 
 from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QMenu, QTableView
+from shiboken6 import isValid
 
 
 class ViewColumns(QObject):
@@ -103,4 +104,12 @@ class ViewColumns(QObject):
         fit.setEnabled(column >= 0)
         fit.triggered.connect(lambda: self.fit_column(column))
         menu.addAction("自动适配全部列", self.fit_all)
-        menu.exec(self.header.mapToGlobal(position))
+        manager = getattr(self.view.window(), "glass_manager", None)
+        if manager is not None:
+            from cvanalysis.ui.glass.popups import wrap_menu
+            menu = wrap_menu(menu, self.view.window(), manager)
+        try:
+            menu.exec(self.header.mapToGlobal(position))
+        finally:
+            if isValid(menu):
+                menu.deleteLater()

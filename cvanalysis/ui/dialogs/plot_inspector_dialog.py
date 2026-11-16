@@ -25,13 +25,16 @@ from PySide6.QtWidgets import (
 )
 
 from cvanalysis.plotting.axis_limits import axis_display_units, plot_axis_specs
+from cvanalysis.plotting.template_format import TemplateError, format_template
 from cvanalysis.plotting.texts import (
     axis_label_override,
     compact_text_enabled,
     default_axis_text,
 )
-from cvanalysis.ui.theme import apply_theme_role
+from cvanalysis.ui.layout import fit_dialog
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role
 from cvanalysis.ui.widgets.plot_color_panel import PlotColorPanel
+from cvanalysis.ui.widgets.formatted_text_preview import FormattedTextPreview
 
 
 class PlotInspectorDialog(QDialog):
@@ -43,8 +46,8 @@ class PlotInspectorDialog(QDialog):
         super().__init__(parent)
         self.tab = tab
         self._loading = True
-        self.setWindowTitle(f"当前图设置 - {tab.spec.label}")
-        self.resize(700, 800)
+        self.setWindowTitle(f"当前图样式 - {tab.spec.label}")
+        fit_dialog(self, 720, 800, min_width=520, min_height=460)
         self._build_ui()
         self._loading = False
 
@@ -74,6 +77,9 @@ class PlotInspectorDialog(QDialog):
         apply_theme_role(info, "hint")
         layout.addWidget(info)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        close_button = buttons.button(QDialogButtonBox.Close)
+        if close_button is not None:
+            close_button.setText("关闭")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -131,6 +137,13 @@ class PlotInspectorDialog(QDialog):
     @staticmethod
     def _sync_axis_label_status(edit: QLineEdit, status: QLabel) -> None:
         text = edit.text()
+        try:
+            format_template(text, {"unit": "V"}, strict=True)
+        except TemplateError as exc:
+            status.setText("格式无效")
+            status.setToolTip(str(exc))
+            return
+        status.setToolTip("")
         status.setText("空标签" if text and not text.strip() else "")
 
     def _axis_default_placeholder(self, spec, side: str, ax, override: str | None) -> str:
@@ -163,7 +176,7 @@ class PlotInspectorDialog(QDialog):
         group_layout.setContentsMargins(9, 24, 9, 9)
         hint = QLabel(
             "留空使用当前文本预设；输入一个或多个空格表示空标签。"
-            "每图标签覆盖保存在项目中。"
+            "可用 {unit} 自动显示当前轴单位；每图标签覆盖保存在项目中。"
         )
         hint.setWordWrap(True)
         apply_theme_role(hint, "hint")
@@ -189,7 +202,8 @@ class PlotInspectorDialog(QDialog):
                 placeholder = self._axis_default_placeholder(spec, side, ax, override)
                 edit.setPlaceholderText(placeholder)
                 edit.setToolTip(
-                    f"{placeholder}\n留空使用默认文字；输入一个或多个空格表示空标签。"
+                    f"{placeholder}\n可用变量：{{unit}}。留空使用默认文字；输入一个或多个空格表示空标签。"
+                    + r" 支持 $I_{ref}$ 和公式外 \n 换行。"
                 )
                 status = QLabel("")
                 status.setMinimumWidth(52)
@@ -233,7 +247,15 @@ class PlotInspectorDialog(QDialog):
         display_form = QFormLayout(display)
         self.title_edit = QLineEdit(tab.spec.title)
         self.title_edit.setPlaceholderText("留空使用文本预设中的默认标题")
+        self.title_edit.setToolTip(r"支持 MathText，例如 $I_{ref}$；公式外可用 \n 换行。")
+        self.title_status = QLabel("")
+        apply_theme_role(self.title_status, "error")
         display_form.addRow("标题文字:", self.title_edit)
+        self.title_preview = FormattedTextPreview()
+        display_form.addRow(self.title_preview)
+        display_form.addRow(self.title_status)
+        self.title_edit.textChanged.connect(self._update_title_preview)
+        self._update_title_preview()
         self.show_title_cb = QCheckBox("显示标题")
         self.show_title_cb.setChecked(style.show_title)
         self.show_legend_cb = QCheckBox("显示图例")
@@ -382,6 +404,16 @@ class PlotInspectorDialog(QDialog):
         if not self._loading:
             self._apply_timer.start()
 
+    def _update_title_preview(self, *_args):
+        try:
+            preview = format_template(self.title_edit.text(), {}, strict=True)
+        except TemplateError as exc:
+            self.title_status.setText("标题格式无效：" + str(exc))
+            self.title_preview.show_preview("")
+            return
+        self.title_status.clear()
+        self.title_preview.show_preview(preview)
+
     def reject(self) -> None:
         if not self._loading and self._apply_timer.isActive():
             self._apply_timer.stop()
@@ -405,6 +437,13 @@ class PlotInspectorDialog(QDialog):
             entry: dict[str, str] = {}
             for side, edit in edits.items():
                 text = edit.text()
+                try:
+                    format_template(text, {"unit": "V"}, strict=True)
+                except TemplateError:
+                    previous = axis_label_override(tab.spec, section, side)
+                    if previous is not None:
+                        entry[side] = previous
+                    continue
                 if text == "":
                     continue
                 entry[side] = " " if text.strip() == "" else text
@@ -415,7 +454,12 @@ class PlotInspectorDialog(QDialog):
         else:
             options.pop("axis_labels", None)
         tab.spec.analysis_options = options
-        tab.spec.title = self.title_edit.text().strip()
+        try:
+            format_template(self.title_edit.text(), {}, strict=True)
+            tab.spec.title = self.title_edit.text().strip()
+            self.title_status.clear()
+        except TemplateError as exc:
+            self.title_status.setText("标题格式无效：" + str(exc))
         tab.spec.show_legend = self.show_legend_cb.isChecked()
         tab.spec.show_axes = self.show_axes_cb.isChecked()
         tab.spec.annotations = self.annotations_cb.isChecked()

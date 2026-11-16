@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -26,10 +27,13 @@ from cvanalysis.plotting.texts import (
     TEXT_CATEGORIES,
     TextField,
     category_fields,
+    preview_text_template,
     validate_text_template,
 )
 from cvanalysis.services.settings_service import SettingsService
-from cvanalysis.ui.theme import apply_theme_role
+from cvanalysis.ui.layout import fit_dialog
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role
+from cvanalysis.ui.widgets.formatted_text_preview import FormattedTextPreview
 
 
 _CATEGORY_LABELS = {
@@ -58,7 +62,7 @@ class TextPresetEditorDialog(QDialog):
         self.edits: dict[str, QLineEdit] = {}
         self.saved_name = preset_name
         self.setWindowTitle("新建文本预设" if new_preset else "编辑文本预设")
-        self.resize(760, 780)
+        fit_dialog(self, 760, 780, min_width=520, min_height=460)
         self._build_ui()
 
     def _initial_values(self) -> dict[str, str]:
@@ -78,11 +82,18 @@ class TextPresetEditorDialog(QDialog):
         layout = QVBoxLayout(self)
         info = QLabel(
             "文本预设用于所有图的默认图内文字。留空表示使用内置默认；"
-            "输入空格表示空文字。支持 Matplotlib mathtext，如 $v^{-1/2}$。"
+            "输入空格表示空文字。数值可使用 {value:.2f}、{value:.4g}；末尾零会保留。"
+            "支持 f/e/g 格式，精度最多 12 位，不支持运算表达式。"
+            "支持 Matplotlib mathtext，如 $v^{-1/2}$。"
+            r" 公式外可输入 \n 换行；数学分组包含变量时可写 $I_{value:.2f}$。"
         )
         info.setWordWrap(True)
         apply_theme_role(info, "muted")
         layout.addWidget(info)
+        self.format_preview = FormattedTextPreview()
+        self.format_preview.show_preview("编辑变量模板时显示格式示例。")
+        apply_theme_role(self.format_preview, "hint")
+        layout.addWidget(self.format_preview)
 
         top = QFormLayout()
         self.name_edit = QLineEdit(self.preset_name)
@@ -111,6 +122,14 @@ class TextPresetEditorDialog(QDialog):
             layout.addWidget(reset_btn)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        ok_button = buttons.button(QDialogButtonBox.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        if ok_button is not None:
+            ok_button.setText("确定")
+            ok_button.setDefault(True)
+            apply_button_role(ok_button, "primary", pill=True)
+        if cancel_button is not None:
+            cancel_button.setText("取消")
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -140,6 +159,8 @@ class TextPresetEditorDialog(QDialog):
                 else:
                     edit.setToolTip("留空使用内置默认文字；输入空格表示空文字。")
                 self.edits[field.key] = edit
+                if field.placeholders:
+                    edit.textChanged.connect(lambda text, key=field.key: self._preview_format(key, text))
                 form.addRow(field.label + ":", edit)
             page_layout.addWidget(group)
         page_layout.addStretch(1)
@@ -148,6 +169,16 @@ class TextPresetEditorDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
         return scroll
+
+    def _preview_format(self, key: str, text: str) -> None:
+        try:
+            preview = preview_text_template(key, text)
+        except ValueError as exc:
+            apply_theme_role(self.format_preview, "error")
+            self.format_preview.show_preview(f"格式无效：{exc}")
+            return
+        apply_theme_role(self.format_preview, "hint")
+        self.format_preview.show_preview("格式示例：" + preview if preview else "留空使用内置默认文字。")
 
     def _reset_defaults(self) -> None:
         for key, edit in self.edits.items():

@@ -9,9 +9,10 @@ from typing import Iterable
 from cvanalysis.domain.models import Dataset
 from cvanalysis.io.base import DataParser, ParseIssue, ParseResult, read_text_file
 from cvanalysis.io.chi import ChiCPParser, ChiCVParser, ChiEISParser
+from cvanalysis.io.chi_sweep import ChiITParser, ChiLSVParser
 
 
-DEFAULT_PARSERS: tuple[DataParser, ...] = (ChiCVParser(), ChiEISParser(), ChiCPParser())
+DEFAULT_PARSERS: tuple[DataParser, ...] = (ChiLSVParser(), ChiITParser(), ChiCVParser(), ChiEISParser(), ChiCPParser())
 
 
 def available_parsers() -> list[DataParser]:
@@ -32,7 +33,7 @@ def parse_file(path: str | Path, parsers: Iterable[DataParser] | None = None) ->
     if parser is None:
         raise ValueError(
             "无法识别文件类型，文件需包含 'Cyclic Voltammetry'、'A.C. Impedance' "
-            "或 'Chronopotentiometry' 标记"
+            "、'Chronopotentiometry'、'Linear Sweep Voltammetry' 或 'Amperometric i-t Curve' 标记"
         )
     result = parser.parse(text, file_path)
     for run in result.runs:

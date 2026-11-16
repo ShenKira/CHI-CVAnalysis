@@ -11,16 +11,20 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from cvanalysis.appearance import ThemeDefinition, load_themes
+from cvanalysis.ui.layout import fit_dialog
+from cvanalysis.ui.theme import apply_button_role
 
 
 class ThemePreview(QWidget):
@@ -46,10 +50,10 @@ class ThemePreview(QWidget):
             if not color:
                 continue
             chip = QLabel(self)
-            chip.setFixedSize(22, 22)
+            chip.setFixedSize(24, 24)
             chip.setToolTip(color)
             chip.setStyleSheet(
-                f"background: {color}; border-radius: 5px;"
+                f"background: {color}; border-radius: 6px; border: 1px solid rgba(0, 0, 0, 0.10);"
             )
             self._layout.addWidget(chip)
         self._layout.addStretch(1)
@@ -60,12 +64,22 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.themes = list(themes) if themes is not None else load_themes()
-        scale = max(1.0, min(1.6, self.font().pointSizeF() / 11.0))
-        self.resize(int(500 * scale), int(640 * scale))
+        fit_dialog(self, 520, 680, min_width=420, min_height=500)
         self._build_ui(settings)
 
     def _build_ui(self, settings: dict) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(2, 2, 2, 2)
+        body_layout.setSpacing(10)
+        scroll.setWidget(body)
+        layout.addWidget(scroll, 1)
         analysis = settings.get("analysis", {})
         eis = settings.get("eis", {})
 
@@ -131,7 +145,7 @@ class SettingsDialog(QDialog):
         index = self.normalization_combo.findData(analysis.get("default_normalization", "none"))
         self.normalization_combo.setCurrentIndex(max(0, index))
         form.addRow("默认归一化:", self.normalization_combo)
-        layout.addWidget(group)
+        body_layout.addWidget(group)
 
         color_group = QGroupBox("CV 颜色循环")
         color_form = QFormLayout(color_group)
@@ -156,9 +170,10 @@ class SettingsDialog(QDialog):
         self.color_random_cb.setChecked(bool(colors.get("enable_random", False)))
         color_form.addRow(self.color_random_cb)
         self.custom_colors_edit = QLineEdit(", ".join(colors.get("custom_colors", [])))
+        self.custom_colors_edit.setCursorPosition(0)
         self.custom_colors_edit.setToolTip("逗号分隔的十六进制颜色，用于“自定义颜色”模式")
         color_form.addRow("自定义颜色:", self.custom_colors_edit)
-        layout.addWidget(color_group)
+        body_layout.addWidget(color_group)
 
         eis_group = QGroupBox("EIS")
         eis_form = QFormLayout(eis_group)
@@ -174,7 +189,7 @@ class SettingsDialog(QDialog):
         index = self.fit_model_combo.findData(eis.get("fit_model", "auto"))
         self.fit_model_combo.setCurrentIndex(max(0, index))
         eis_form.addRow("默认拟合模型:", self.fit_model_combo)
-        layout.addWidget(eis_group)
+        body_layout.addWidget(eis_group)
 
         ui_group = QGroupBox("GUI 设置")
         ui_form = QFormLayout(ui_group)
@@ -200,12 +215,34 @@ class SettingsDialog(QDialog):
         self.ui_scale_spin.setSingleStep(0.05)
         self.ui_scale_spin.setDecimals(2)
         self.ui_scale_spin.setValue(float(settings.get("ui", {}).get("scale", 1.0)))
-        self.ui_scale_spin.setToolTip("高分辨率屏幕可调到 1.15–1.30；修改后立即生效并保存。")
+        self.ui_scale_spin.setToolTip(
+            "高分辨率屏幕可调到 1.15–1.30；保存后立即重设界面字体和控件尺寸。"
+            "界面主题只影响 GUI，不改变图表颜色或导出结果。"
+        )
         ui_form.addRow("界面缩放倍数:", self.ui_scale_spin)
-        layout.addWidget(ui_group)
+
+        self.material_combo = QComboBox()
+        self.material_combo.addItem("Liquid Glass", "liquid_glass")
+        self.material_combo.addItem("实色", "solid")
+        material_index = self.material_combo.findData(settings.get("ui", {}).get("material", "liquid_glass"))
+        self.material_combo.setCurrentIndex(max(0, material_index))
+        ui_form.addRow("界面材质:", self.material_combo)
+        self.animations_cb = QCheckBox("启用标签和指针动画")
+        self.animations_cb.setChecked(bool(settings.get("ui", {}).get("animations", True)))
+        ui_form.addRow("界面动画:", self.animations_cb)
+        body_layout.addWidget(ui_group)
+        body_layout.addStretch(1)
         self._refresh_theme_preview()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        ok_button = buttons.button(QDialogButtonBox.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        if ok_button is not None:
+            ok_button.setText("确定")
+            ok_button.setDefault(True)
+            apply_button_role(ok_button, "primary", pill=True)
+        if cancel_button is not None:
+            cancel_button.setText("取消")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -252,5 +289,7 @@ class SettingsDialog(QDialog):
             "ui": {
                 "theme": self.theme_combo.currentData(),
                 "scale": self.ui_scale_spin.value(),
+                "material": self.material_combo.currentData(),
+                "animations": self.animations_cb.isChecked(),
             },
         }

@@ -264,7 +264,7 @@ def test_axis_labels_round_trip_in_project(tmp_path, synthetic_cv_runs):
 
 
 def test_inspector_axis_label_edits_apply_and_clear(synthetic_cv_runs):
-    from PySide6.QtTest import QTest
+    from PySide6.QtTest import QSignalSpy
     from PySide6.QtWidgets import QApplication
 
     from cvanalysis.ui.dialogs.plot_inspector_dialog import PlotInspectorDialog
@@ -276,16 +276,17 @@ def test_inspector_axis_label_edits_apply_and_clear(synthetic_cv_runs):
     tab = PlotTab(spec, BUILTIN_PRESETS["daily"], dataset)
     dialog = PlotInspectorDialog(tab)
     edits = dialog.axis_label_edits["main"]
+    applied = QSignalSpy(dialog._apply_timer.timeout)
     edits["x"].setText("E vs Ag/AgCl (V)")
-    QTest.qWait(180)
+    assert applied.wait(5000)
     assert spec.analysis_options["axis_labels"]["main"]["x"] == "E vs Ag/AgCl (V)"
     assert tab.figure.axes[0].get_xlabel() == "E vs Ag/AgCl (V)"
     edits["y"].setText("   ")
-    QTest.qWait(180)
+    assert applied.wait(5000)
     assert spec.analysis_options["axis_labels"]["main"]["y"] == " "
     assert tab.figure.axes[0].get_ylabel() == ""
     edits["x"].clear()
-    QTest.qWait(180)
+    assert applied.wait(5000)
     assert "x" not in spec.analysis_options["axis_labels"]["main"]
     assert tab.figure.axes[0].get_xlabel() == "Potential (V)"
     dialog.deleteLater()
@@ -330,6 +331,12 @@ def test_text_preset_manager_has_text_section_and_editor(tmp_path):
 
     editor = TextPresetEditorDialog(service, "custom")
     editor.edits["axis.cv_overlay.x"].setText("E (V)")
+    numeric = editor.edits["annotation.cv_overlay.mean"]
+    numeric.setText("Mean={mean:.2f} {unit}")
+    assert "1.00" in editor.format_preview.text()
+    numeric.setText("{mean.__class__}")
+    assert "格式无效" in editor.format_preview.text()
+    numeric.setText("Mean={mean:.2f} {unit}")
     editor.activate_cb.setChecked(True)
     editor._accept()
     assert service.active_text_preset == "custom"

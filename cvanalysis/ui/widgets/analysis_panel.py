@@ -26,14 +26,15 @@ from PySide6.QtWidgets import (
 )
 
 from cvanalysis.analysis.fitting import available_models
-from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun
-from cvanalysis.ui.theme import apply_theme_role
+from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun, SweepRun
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role
 
 
 class AnalysisPanel(QWidget):
     plot_requested = Signal(str)
     fit_requested = Signal()
     options_changed = Signal()
+    concat_existing_cp_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,14 +44,20 @@ class AnalysisPanel(QWidget):
         self._display_kind = None
         self._loading = False
         self._build_ui()
+        self.set_concat_existing_enabled(
+            False, "工作区尚未加载 CP 数据；请先用“导入数据文件”导入 CP 文件"
+        )
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         self.info_label = QLabel("尚未导入数据")
         self.info_label.setWordWrap(True)
+        self.info_label.setToolTip(
+            "绘图优先使用树中选中的文件；没有选中行时使用左侧勾选/可见的数据。"
+        )
         apply_theme_role(self.info_label, "muted")
         layout.addWidget(self.info_label)
 
@@ -58,6 +65,9 @@ class AnalysisPanel(QWidget):
         self.normalization_combo.addItem("原始值", "none")
         self.normalization_combo.addItem("按电极面积", "area")
         self.normalization_combo.addItem("按活性物质质量", "mass")
+        self.normalization_combo.setToolTip(
+            "新图使用的电流/容量归一化方式；已有图保留自己的归一化设置。"
+        )
         normalization_form = QFormLayout()
         normalization_form.addRow("归一化:", self.normalization_combo)
         layout.addLayout(normalization_form)
@@ -70,6 +80,9 @@ class AnalysisPanel(QWidget):
         self.target_spin.setSuffix(" V")
         self.target_spin.setMinimumWidth(80)
         self.target_spin.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.target_spin.setToolTip(
+            "固定电位电流和 b 值分析使用的目标电位。"
+        )
         self.target_spin.valueChanged.connect(self._emit_options)
 
         self.scan_rate_spin = QDoubleSpinBox()
@@ -78,6 +91,9 @@ class AnalysisPanel(QWidget):
         self.scan_rate_spin.setSuffix(" V/s")
         self.scan_rate_spin.setMinimumWidth(80)
         self.scan_rate_spin.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.scan_rate_spin.setToolTip(
+            "Dunn 电流分解使用的扫描速率。"
+        )
         self.scan_rate_spin.valueChanged.connect(self._emit_options)
 
         self.renumber_cycles_cb = QCheckBox("显示时重编号循环")
@@ -85,12 +101,21 @@ class AnalysisPanel(QWidget):
         self.renumber_cycles_cb.stateChanged.connect(self._emit_options)
         self.show_legend_cb = QCheckBox("显示图例")
         self.show_legend_cb.setChecked(True)
+        self.show_legend_cb.setToolTip(
+            "新图是否显示图例；已有图保留自己的显示开关。"
+        )
         self.show_legend_cb.stateChanged.connect(self._emit_options)
         self.show_axes_cb = QCheckBox("显示坐标轴")
         self.show_axes_cb.setChecked(True)
+        self.show_axes_cb.setToolTip(
+            "新图是否显示坐标轴、刻度和轴标题。"
+        )
         self.show_axes_cb.stateChanged.connect(self._emit_options)
         self.show_annotations_cb = QCheckBox("显示统计注释")
         self.show_annotations_cb.setChecked(True)
+        self.show_annotations_cb.setToolTip(
+            "新图是否显示统计和分析注释。"
+        )
         self.show_annotations_cb.stateChanged.connect(self._emit_options)
 
         form = QFormLayout()
@@ -120,7 +145,7 @@ class AnalysisPanel(QWidget):
         ]
         for label, kind, tooltip in cv_buttons:
             button = QPushButton(label)
-            button.setProperty("secondary", True)
+            apply_button_role(button, "secondary")
             button.setToolTip(tooltip)
             button.clicked.connect(lambda checked=False, k=kind: self.plot_requested.emit(k))
             cv_layout.addWidget(button)
@@ -133,19 +158,23 @@ class AnalysisPanel(QWidget):
         self.freq_low_edit.setPlaceholderText("低频，如 0.01")
         self.freq_low_edit.setMinimumWidth(50)
         self.freq_low_edit.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.freq_low_edit.setToolTip("EIS 频率过滤下限（Hz）；留空表示不限。")
         self.freq_high_edit = QLineEdit()
         self.freq_high_edit.setPlaceholderText("高频，如 1e6")
         self.freq_high_edit.setMinimumWidth(50)
         self.freq_high_edit.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.freq_high_edit.setToolTip("EIS 频率过滤上限（Hz）；留空表示不限。")
         freq_row.addWidget(QLabel("频率:"))
         freq_row.addWidget(self.freq_low_edit, 1)
         freq_row.addWidget(QLabel("–"))
         freq_row.addWidget(self.freq_high_edit, 1)
         reset_freq_btn = QPushButton("重置")
-        reset_freq_btn.setProperty("secondary", True)
+        apply_button_role(reset_freq_btn, "secondary")
         reset_freq_btn.setToolTip("清空频率范围")
         reset_freq_btn.setMinimumWidth(36)
-        reset_freq_btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        # Reserve the button's width in the frequency row; Ignored can let the
+        # stretching edits consume it and push the button past the page edge.
+        reset_freq_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         reset_freq_btn.clicked.connect(self._reset_frequency)
         freq_row.addWidget(reset_freq_btn)
         eis_layout.addLayout(freq_row)
@@ -188,9 +217,15 @@ class AnalysisPanel(QWidget):
             ("Bode 图", "eis_bode"),
             ("拟合当前 EIS", "fit"),
         ]
+        eis_tooltips = {
+            "eis_nyquist": "绘制选中 EIS 数据的 Nyquist 图（Z''-Z'）。",
+            "eis_bode": "绘制选中 EIS 数据的 Bode 图（|Z| 与相位随频率）。",
+            "fit": "用当前频率范围和模型拟合选中的 EIS 数据。",
+        }
         for label, kind in eis_buttons:
             button = QPushButton(label)
-            button.setProperty("secondary", True)
+            apply_button_role(button, "secondary")
+            button.setToolTip(eis_tooltips.get(kind, ""))
             if kind == "fit":
                 button.clicked.connect(self.fit_requested)
             else:
@@ -225,10 +260,21 @@ class AnalysisPanel(QWidget):
         ]
         for label, kind, tooltip in cp_buttons:
             button = QPushButton(label)
-            button.setProperty("secondary", True)
+            apply_button_role(button, "secondary")
             button.setToolTip(tooltip)
             button.clicked.connect(lambda checked=False, k=kind: self.plot_requested.emit(k))
             cp_layout.addWidget(button)
+        concat_existing_button = QPushButton("拼接已加载 CP...")
+        apply_button_role(concat_existing_button, "secondary")
+        concat_existing_button.setToolTip(
+            "直接使用工作区中已选中或已勾选的多个 CP 数据创建拼接容量-循环图，"
+            "不会重新打开文件对话框。"
+        )
+        concat_existing_button.clicked.connect(
+            self.concat_existing_cp_requested
+        )
+        self.concat_existing_button = concat_existing_button
+        cp_layout.addWidget(concat_existing_button)
         cp_layout.addStretch(1)
 
         options_widget = QWidget()
@@ -239,10 +285,28 @@ class AnalysisPanel(QWidget):
         self.analysis_tabs.setDocumentMode(True)
         self.analysis_tabs.setElideMode(Qt.ElideRight)
         self.analysis_tabs.setUsesScrollButtons(True)
+        lsv_group = QGroupBox("LSV 线性扫描")
+        lsv_layout = QVBoxLayout(lsv_group)
+        lsv_button = QPushButton("绘制 LSV 电流-电位")
+        apply_button_role(lsv_button, "secondary")
+        lsv_button.setToolTip("绘制选中 LSV 数据的电流-电位曲线。")
+        lsv_button.clicked.connect(lambda: self.plot_requested.emit("lsv_curve"))
+        lsv_layout.addWidget(lsv_button)
+        lsv_layout.addStretch(1)
+        it_group = QGroupBox("I-T 电流-时间")
+        it_layout = QVBoxLayout(it_group)
+        it_button = QPushButton("绘制 I-T 电流-时间")
+        apply_button_role(it_button, "secondary")
+        it_button.setToolTip("绘制选中 I-T 数据的电流-时间曲线。")
+        it_button.clicked.connect(lambda: self.plot_requested.emit("it_curve"))
+        it_layout.addWidget(it_button)
+        it_layout.addStretch(1)
         for label, tooltip, page in (
             ("CV", "CV 快速分析：叠加、扫速、b 值、Dunn/Trasatti", cv_group),
             ("EIS", "EIS 快速分析：Nyquist、Bode 与拟合", eis_group),
             ("CP", "CP/GCD 恒流充放电：GCD 曲线与容量-循环", cp_group),
+            ("LSV", "线性扫描伏安曲线", lsv_group),
+            ("I-T", "电流-时间曲线", it_group),
             ("显示", "通用显示选项", common_group),
         ):
             index = self.analysis_tabs.addTab(page, label)
@@ -258,15 +322,29 @@ class AnalysisPanel(QWidget):
 
         layout.addWidget(self.options_scroll, stretch=1)
 
-        self.freq_low_edit.textChanged.connect(self._emit_options)
-        self.freq_high_edit.textChanged.connect(self._emit_options)
+        self.freq_low_edit.textChanged.connect(self._emit_frequency_options)
+        self.freq_high_edit.textChanged.connect(self._emit_frequency_options)
         self.fit_model_combo.currentIndexChanged.connect(self._emit_options)
+
+    def set_concat_existing_enabled(self, enabled: bool, tooltip: str | None = None) -> None:
+        """Keep the direct-concat entry aligned with the current tree scope."""
+        button = getattr(self, "concat_existing_button", None)
+        if button is None:
+            return
+        button.setEnabled(bool(enabled))
+        if tooltip:
+            button.setToolTip(tooltip)
+            button.setAccessibleDescription(tooltip)
 
     def _reset_frequency(self) -> None:
         self.freq_low_edit.clear()
         self.freq_high_edit.clear()
 
     def _emit_options(self, *args) -> None:
+        if not self._loading:
+            self.options_changed.emit()
+
+    def _emit_frequency_options(self, *args) -> None:
         if not self._loading and self.validate_frequency():
             self.options_changed.emit()
 
@@ -334,8 +412,12 @@ class AnalysisPanel(QWidget):
         cv_runs = self._runs_for_display(dataset, CVRun)
         eis_runs = self._runs_for_display(dataset, EISRun)
         cp_runs = self._runs_for_display(dataset, CPRun)
+        sweep_runs = self._runs_for_display(dataset, SweepRun)
+        lsv_runs = [run for run in sweep_runs if run.kind == "lsv"]
+        it_runs = [run for run in sweep_runs if run.kind == "it"]
+        scope = "选中行优先" if self._selected_run_ids else "勾选数据"
         self.info_label.setText(
-            f"已选 {len(cv_runs)} 个 CV / {len(eis_runs)} 个 EIS / {len(cp_runs)} 个 CP"
+            f"新图范围（{scope}）：{len(cv_runs)} CV / {len(eis_runs)} EIS / {len(cp_runs)} CP / {len(lsv_runs)} LSV / {len(it_runs)} I-T"
         )
         self._update_ranges(cv_runs, eis_runs)
         selected_types = {
@@ -343,7 +425,7 @@ class AnalysisPanel(QWidget):
             if isinstance(run, CVRun)
             else "cp"
             if isinstance(run, CPRun)
-            else "eis"
+            else run.kind if isinstance(run, SweepRun) else "eis"
             for run in dataset.all_runs()
             if run.run_id in self._selected_run_ids
         }
@@ -356,8 +438,10 @@ class AnalysisPanel(QWidget):
             if cp_runs and not cv_runs and not eis_runs
             else None
         )
+        if not selected_types and not (cv_runs or eis_runs or cp_runs):
+            kind = "lsv" if lsv_runs and not it_runs else "it" if it_runs and not lsv_runs else None
         if kind and kind != self._display_kind:
-            self.analysis_tabs.setCurrentIndex({"cv": 0, "eis": 1, "cp": 2}[kind])
+            self.analysis_tabs.setCurrentIndex({"cv": 0, "eis": 1, "cp": 2, "lsv": 3, "it": 4}[kind])
         self._display_kind = kind
 
     def _runs_for_display(self, dataset: Dataset, run_type):
@@ -398,13 +482,19 @@ class AnalysisPanel(QWidget):
                 self.freq_low_edit.setPlaceholderText(f"{min(lows):.4g}")
                 self.freq_high_edit.setPlaceholderText(f"{max(highs):.4g}")
 
+    def _safe_frequency(self, text: str) -> float | None:
+        try:
+            return self._parse_positive(text)
+        except ValueError:
+            return None
+
     def options(self) -> dict:
         return {
             "normalization": self.normalization_combo.currentData() or "none",
             "target_voltage": self.target_spin.value(),
             "selected_scan_rate": self.scan_rate_spin.value(),
-            "frequency_low": self._parse_positive(self.freq_low_edit.text()),
-            "frequency_high": self._parse_positive(self.freq_high_edit.text()),
+            "frequency_low": self._safe_frequency(self.freq_low_edit.text()),
+            "frequency_high": self._safe_frequency(self.freq_high_edit.text()),
             "fit_model": self.fit_model_combo.currentData() or "rct_cpe",
             "renumber_cycles": self.renumber_cycles_cb.isChecked(),
             "show_legend": self.show_legend_cb.isChecked(),

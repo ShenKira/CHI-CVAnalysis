@@ -1,6 +1,8 @@
 ﻿# CVAnalysis 修正与功能验收报告
 
-更新日期：2026-11-06。本报告替代上一版问题清单，记录当前修正状态与验证边界。
+更新日期：2026-11-07。本报告替代上一版问题清单，记录当前修正状态与验证边界。
+
+> 本文记录 2026-11-07 的历史检查点，最新功能请参阅 [README](../README.md) 和当前代码。
 
 ## 使用方式
 
@@ -59,14 +61,14 @@
 
 ## 验证
 
-完整回归：**248 项通过**（2026-11-06；多 CV 长文件名图例的 tight-layout 警告已通过标签紧凑化和图例防溢出消除；`-q` 无 warning 摘要）。历史汇总文件 `test_review_revision.py` 已退役，唯一测试迁移到 `test_cap_scan.py`、`test_gui_layout.py`、`test_project.py` 等领域文件，并移除了对根目录 `config.json` / `CP-Test.txt` 的测试依赖。GUI 主题颜色由 JSON 管理，设置中的 GUI 分组统一管理主题与缩放。
+完整回归：**255 项通过**（2026-11-07；多 CV 长文件名图例的 tight-layout 警告已通过标签紧凑化和图例防溢出消除；`-q` 无 warning 摘要）。历史汇总文件 `test_review_revision.py` 已退役，唯一测试迁移到 `test_cap_scan.py`、`test_gui_layout.py`、`test_project.py` 等领域文件，并移除了对根目录 `config.json` / `CP-Test.txt` 的测试依赖。GUI 主题颜色由 JSON 管理，设置中的 GUI 分组统一管理主题与缩放；本次新增设计 token、软圆角/胶囊主操作、三态勾选、明确绘图范围和旧主题迁移测试。所有改动均不涉及 `cvanalysis/plotting/`，科研绘图输出保持不变。
 
-新增行为回归覆盖：裁剪统计一致性、异常状态恢复、直线拟合及独立开关、三种占比的固定像素尺寸和缩放后字号、50%/25% 源字号翻倍、自定义正文的最低字号、重复补偿幂等性、可移植项目往返、固定底栏/切图/清空/宽度恢复、旧 dock 状态迁移期间运行完整 Qt 事件循环、非法输入提示、后台任务响应及安全关闭、绘图右键复制 PNG/SVG 矢量图、Nyquist 高频过滤坐标范围与手动范围优先、线条与 marker 填充/边缘颜色覆盖；本次新增 CP 面积 with-holds、b 值三种电流口径、Trasatti 实际积分窗口/窗口警告/q_total、可选 z-score 离群、CV 首段标记、CV 后续区块停止解析、EIS 面积注释/质量归一化警告、CP scipy 回退、相似长文件名紧凑图例、人工别名/`{Alias}`、普通图例防溢出、CV/CP 结果逐循环展开。
+新增行为回归覆盖：裁剪统计一致性、异常状态恢复、直线拟合及独立开关、三种占比的固定像素尺寸和缩放后字号、50%/25% 源字号翻倍、自定义正文的最低字号、重复补偿幂等性、可移植项目往返、固定底栏/切图/清空/宽度恢复、旧 dock 状态迁移期间运行完整 Qt 事件循环、非法输入提示、后台任务响应及安全关闭、绘图右键复制 PNG/SVG 矢量图、Nyquist 高频过滤坐标范围与手动范围优先、线条与 marker 填充/边缘颜色覆盖；本次新增 CP 面积 with-holds、b 值三种电流口径、Trasatti 实际积分窗口/窗口警告/q_total、可选 z-score 离群、CV 首段标记、CV 后续区块停止解析、EIS 面积注释/质量归一化警告、CP scipy 回退、相似长文件名紧凑图例、人工别名/`{Alias}`、普通图例防溢出、CV/CP 结果逐循环展开，以及 GUI 设计 token、三态树勾选、旧主题迁移、非法 EIS 频率不阻塞其他选项。
 
 使用 Qt offscreen 检查固定右下选项面板及真实样本的 50%/25% 占比导出图。完整测试命令：
 
 ```powershell
-python -m pytest tests_v2 --basetemp=.test_tmp/fixedpanel_final -p no:cacheprovider --tb=short
+python -m pytest tests_v2 --basetemp=.test_tmp/fixedpanel_final --tb=short
 ```
 
 ## 验证边界与后续维护

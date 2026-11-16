@@ -43,7 +43,7 @@ SCHEMA_VERSION = 2
 # QMainWindow dock graphs are not restored anymore; the version still lets old
 # configs reset only their layout while keeping presets, columns and analysis
 # settings intact.
-BOTTOM_LAYOUT_VERSION = 4
+BOTTOM_LAYOUT_VERSION = 5
 _KNOWN_KEYS = {
     "schema_version", "app", "analysis", "eis", "presets", "text_presets",
     "plotting", "ui", "plot", "colors", "eis_plot", "axis", "grid", "tick",
@@ -96,8 +96,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "last_plot_preset": DEFAULT_PRESET_NAME,
         "scale": 1.0,
         "theme": DEFAULT_THEME_ID,
+        "material": "liquid_glass",
+        "animations": True,
         "dataset_splitter": None,
         "analysis_splitter": None,
+        "dock_widths": {},
         "column_widths": {},
         "bottom_splitter": None,
         "bottom_layout_version": None,
@@ -471,6 +474,10 @@ class SettingsService:
         ui = settings["ui"]
         ui["scale"] = _as_float(ui.get("scale"), 1.0, minimum=0.8, maximum=1.6)
         ui["theme"] = normalize_theme(ui.get("theme"), self.theme_ids())
+        if ui.get("material") in {"balanced", "economy"}:
+            ui["material"] = "liquid_glass"
+        ui["material"] = _as_choice(ui.get("material"), {"liquid_glass", "solid"}, "liquid_glass")
+        ui["animations"] = _as_bool(ui.get("animations"), True)
         for key in ("geometry", "window_state"):
             if ui.get(key) is not None and not isinstance(ui.get(key), str):
                 ui[key] = None
@@ -484,6 +491,17 @@ class SettingsService:
         ui["column_widths"] = (
             ui.get("column_widths") if isinstance(ui.get("column_widths"), dict) else {}
         )
+        dock_widths = ui.get("dock_widths")
+        if not isinstance(dock_widths, dict):
+            dock_widths = {}
+        ui["dock_widths"] = {
+            str(key): int(value)
+            for key, value in dock_widths.items()
+            if str(key) in {"dataset", "analysis"}
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 100 <= float(value) <= 1200
+        }
         version = _as_int(ui.get("bottom_layout_version"), None)
         ui["bottom_layout_version"] = (
             version if version == BOTTOM_LAYOUT_VERSION else None

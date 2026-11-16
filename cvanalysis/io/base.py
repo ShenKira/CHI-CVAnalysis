@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from cvanalysis.domain.errors import ParseError
-from cvanalysis.domain.models import CVRun, EISRun
+from cvanalysis.domain.models import CPRun, CVRun, EISRun, SweepRun
 
 
 @dataclass
@@ -19,7 +19,7 @@ class ParseIssue:
 
 @dataclass
 class ParseResult:
-    runs: list[CVRun | EISRun] = field(default_factory=list)
+    runs: list[CVRun | EISRun | CPRun | SweepRun] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     parser_id: str = ""
     parser_version: int = 1

@@ -44,23 +44,27 @@ CURRENT = UnitFamily(
 )
 CURRENT_DENSITY = UnitFamily(
     "current_density",
-    (("A/cm²", 1.0), ("mA/cm²", 1e3), ("µA/cm²", 1e6), ("nA/cm²", 1e9)),
+    (("A/cm²", 1.0), ("mA/cm²", 1e3), ("µA/cm²", 1e6), ("nA/cm²", 1e9), ("pA/cm²", 1e12)),
+)
+CURRENT_PER_CAPACITANCE = UnitFamily(
+    "current_per_capacitance",
+    (("A/F", 1.0), ("mA/F", 1e3), ("µA/F", 1e6), ("nA/F", 1e9), ("pA/F", 1e12)),
 )
 SPECIFIC_CURRENT = UnitFamily(
     "specific_current",
-    (("A/g", 1.0), ("mA/g", 1e3), ("µA/g", 1e6), ("nA/g", 1e9)),
+    (("A/g", 1.0), ("mA/g", 1e3), ("µA/g", 1e6), ("nA/g", 1e9), ("pA/g", 1e12)),
 )
 CHARGE = UnitFamily(
     "charge",
-    (("C", 1.0), ("mC", 1e3), ("µC", 1e6), ("nC", 1e9)),
+    (("C", 1.0), ("mC", 1e3), ("µC", 1e6), ("nC", 1e9), ("pC", 1e12)),
 )
 CHARGE_DENSITY = UnitFamily(
     "charge_density",
-    (("C/cm²", 1.0), ("mC/cm²", 1e3), ("µC/cm²", 1e6), ("nC/cm²", 1e9)),
+    (("C/cm²", 1.0), ("mC/cm²", 1e3), ("µC/cm²", 1e6), ("nC/cm²", 1e9), ("pC/cm²", 1e12)),
 )
 SPECIFIC_CHARGE = UnitFamily(
     "specific_charge",
-    (("C/g", 1.0), ("mC/g", 1e3), ("µC/g", 1e6), ("nC/g", 1e9)),
+    (("C/g", 1.0), ("mC/g", 1e3), ("µC/g", 1e6), ("nC/g", 1e9), ("pC/g", 1e12)),
 )
 IMPEDANCE = UnitFamily(
     "impedance",
@@ -72,11 +76,11 @@ IMPEDANCE_AREA = UnitFamily(
 )
 SPECIFIC_CAPACITANCE = UnitFamily(
     "specific_capacitance",
-    (("F/g", 1.0), ("mF/g", 1e3), ("µF/g", 1e6), ("nF/g", 1e9)),
+    (("F/g", 1.0), ("mF/g", 1e3), ("µF/g", 1e6), ("nF/g", 1e9), ("pF/g", 1e12)),
 )
 AREAL_CAPACITANCE = UnitFamily(
     "areal_capacitance",
-    (("F/cm²", 1.0), ("mF/cm²", 1e3), ("µF/cm²", 1e6), ("nF/cm²", 1e9)),
+    (("F/cm²", 1.0), ("mF/cm²", 1e3), ("µF/cm²", 1e6), ("nF/cm²", 1e9), ("pF/cm²", 1e12)),
 )
 
 
@@ -88,6 +92,12 @@ def choose_unit(family: UnitFamily, value: float | None) -> tuple[str, float]:
 def unit_labels(family: UnitFamily) -> list[str]:
     """Return the selectable labels for a unit family, largest first."""
     return [label for label, _ in family.units]
+
+
+def canonical_unit(label: str | None) -> str:
+    """Accept ASCII or Greek mu prefixes without altering words like 'auto'."""
+    value = str(label or "").replace("μ", "µ")
+    return "µ" + value[1:] if value.startswith("u") else value
 
 
 def unit_factor(family: UnitFamily, label: str | None) -> float | None:
@@ -156,6 +166,29 @@ def current_family(normalization: str = "none") -> UnitFamily:
     return CURRENT
 
 
+def sweep_current_family(display_mode: str = "follow", normalization: str = "none",
+                         capacitance_unit: str = "F") -> UnitFamily:
+    """Current unit family for LSV/I-T, including plot-level references."""
+    if display_mode == "reference_area":
+        return CURRENT_DENSITY
+    if display_mode == "reference_capacitance":
+        return current_per_capacitance_family(capacitance_unit)
+    return current_family(normalization)
+
+
+def current_per_capacitance_family(capacitance_unit: str = "F") -> UnitFamily:
+    """Build A/C units whose denominator matches the selected C reference unit."""
+    cap_unit = canonical_unit(capacitance_unit) or "F"
+    cap_factor = unit_factor(CAPACITANCE, cap_unit) or 1.0
+    return UnitFamily(
+        "current_per_capacitance",
+        tuple(
+            (f"{label}/{cap_unit}", factor / cap_factor)
+            for label, factor in CURRENT.units
+        ),
+    )
+
+
 def capacitance_family(normalization: str = "none") -> UnitFamily:
     if normalization == "area":
         return AREAL_CAPACITANCE
@@ -170,6 +203,17 @@ def charge_family(normalization: str = "none") -> UnitFamily:
     if normalization == "mass":
         return SPECIFIC_CHARGE
     return CHARGE
+
+
+def cp_plot_units(quantity: str, normalization: str = "none") -> tuple[tuple[str, float], ...]:
+    """CP display units as multipliers from the renderer's mAh or F base."""
+    suffix = "/cm²" if normalization == "area" else "/g" if normalization == "mass" else ""
+    if quantity == "capacitance":
+        entries = (("F", 1.0), ("mF", 1e3), ("µF", 1e6), ("nF", 1e9), ("pF", 1e12))
+    else:
+        entries = (("mAh", 1.0), ("µAh", 1e3), ("nAh", 1e6), ("pAh", 1e9), ("Ah", 1e-3),
+                   ("C", 3.6), ("mC", 3.6e3), ("µC", 3.6e6), ("nC", 3.6e9), ("pC", 3.6e12))
+    return tuple((name + suffix, factor) for name, factor in entries)
 
 
 def impedance_family(normalization: str = "none") -> UnitFamily:

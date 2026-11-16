@@ -12,6 +12,8 @@ from typing import Any, Iterable
 from cvanalysis.domain.models import (
     CPMetadata,
     CPRun,
+    SweepRun,
+    SweepMetadata,
     CVMetadata,
     CVRun,
     Dataset,
@@ -27,7 +29,7 @@ from cvanalysis.analysis.fitting import EISFitResult
 
 
 PROJECT_FORMAT = "cvanalysis-project"
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3
 
 
 @dataclass
@@ -66,6 +68,7 @@ def save_project(
     output.parent.mkdir(parents=True, exist_ok=True)
     visible_runs = visible_runs or {}
     cycle_selection = cycle_selection or {}
+    plots = list(plots or [])
     runs_payload: list[dict[str, Any]] = []
     for run in dataset.all_runs():
         embedded = {**getattr(run, "_project_data_extra", {}), **asdict(run)}
@@ -76,7 +79,7 @@ def save_project(
             {
                 **getattr(run, "_project_entry_extra", {}),
                 "run_id": run.run_id,
-                "kind": "cv" if isinstance(run, CVRun) else "cp" if isinstance(run, CPRun) else "eis",
+                "kind": run.kind if isinstance(run, SweepRun) else "cv" if isinstance(run, CVRun) else "cp" if isinstance(run, CPRun) else "eis",
                 "source": str(run.source.resolve()) if run.source else "",
                 "run_index": run.run_index,
                 "name": run.name,
@@ -94,10 +97,14 @@ def save_project(
     payload = {
         **getattr(dataset, "_project_extra", {}),
         "format": PROJECT_FORMAT,
-        "version": PROJECT_VERSION,
+        # Older releases treat unknown run kinds as EIS. Mark projects which
+        # contain new techniques as v3 so those releases reject them safely.
+        "version": max(getattr(dataset, "_project_original_version", 2), 3 if (dataset.lsv_runs or dataset.it_runs or any(
+            spec.kind.startswith(("lsv_", "it_")) for spec in plots
+        )) else 2),
         "name": name or dataset.name,
         "runs": runs_payload,
-        "plots": [spec.to_dict() for spec in (plots or [])],
+        "plots": [spec.to_dict() for spec in plots],
         "active_plot": int(active_plot),
         "analysis_settings": analysis_settings or {},
         "styles": styles or {},
@@ -165,10 +172,17 @@ def load_project(path: str | Path) -> ProjectState:
                 cls, metadata_cls = CPRun, CPMetadata
                 array_keys = ("time", "potential", "hold_time", "hold_current")
                 id_prefix = "cp"
-            else:
+            elif kind in {"lsv", "it"}:
+                cls, metadata_cls = SweepRun, SweepMetadata
+                array_keys = ("x", "current")
+                id_prefix = kind
+                data["kind"] = kind
+            elif kind == "eis":
                 cls, metadata_cls = EISRun, EISMetadata
                 array_keys = ("freq", "z_real", "z_imag", "z_mag", "phase")
                 id_prefix = "eis"
+            else:
+                raise ValueError(f"项目包含不支持的数据类型: {kind}")
             data["run_id"] = new_id(id_prefix)
             metadata_payload = data.get("metadata")
             if not isinstance(metadata_payload, dict):
@@ -235,9 +249,52 @@ def load_project(path: str | Path) -> ProjectState:
             for run_id, template in spec.legend_templates.items()
             if run_id in old_to_new
         }
+        positions = spec.analysis_options.get("it_reference_positions")
+        if isinstance(positions, dict):
+            spec.analysis_options["it_reference_positions"] = {
+                old_to_new[run_id]: position
+                for run_id, position in positions.items()
+                if run_id in old_to_new
+            }
+        visibility = spec.analysis_options.get("it_reference_label_visibility")
+        if isinstance(visibility, dict):
+            spec.analysis_options["it_reference_label_visibility"] = {
+                old_to_new[run_id]: enabled
+                for run_id, enabled in visibility.items()
+                if run_id in old_to_new
+            }
+        concat_order = spec.analysis_options.get("cp_concat_order")
+        if isinstance(concat_order, (list, tuple)):
+            spec.analysis_options["cp_concat_order"] = [
+                old_to_new[run_id]
+                for run_id in concat_order
+                if run_id in old_to_new
+            ]
+        concat_ranges = spec.analysis_options.get("cp_concat_ranges")
+        if isinstance(concat_ranges, dict):
+            spec.analysis_options["cp_concat_ranges"] = {
+                old_to_new[run_id]: (
+                    dict(bounds) if isinstance(bounds, dict) else bounds
+                )
+                for run_id, bounds in concat_ranges.items()
+                if run_id in old_to_new
+            }
+        reference_run_id = spec.analysis_options.get(
+            "capacity_percent_reference_run_id"
+        )
+        if reference_run_id:
+            mapped_reference = old_to_new.get(reference_run_id)
+            if mapped_reference is None:
+                spec.analysis_options["capacity_percent_reference_run_id"] = ""
+                spec.analysis_options["capacity_percent_reference_cycle"] = None
+            else:
+                spec.analysis_options["capacity_percent_reference_run_id"] = (
+                    mapped_reference
+                )
         plots.append(spec)
 
     dataset.name = payload.get("name", source.stem)
+    dataset._project_original_version = version
     known = {"format", "version", "name", "runs", "plots", "active_plot", "analysis_settings", "fits", "styles"}
     dataset._project_extra = {k: v for k, v in payload.items() if k not in known}
     restored_fits = {}

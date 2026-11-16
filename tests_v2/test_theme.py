@@ -15,7 +15,7 @@ def test_default_and_kon_stylesheets_come_from_json():
     assert "__" not in default
     assert "__" not in kon
     assert "#1976d2" in default
-    assert "#c92f3a" in kon
+    assert "#3869b2" in kon
     assert "#24262f" in kon
     assert "#d8b79e" in kon
     assert "#4fb8a1" in kon
@@ -27,6 +27,32 @@ def test_invalid_theme_falls_back_to_default():
     assert application_stylesheet(1.0, "not-a-theme") == default
     assert normalize_theme("K-ON", ["default", "kon"]) == "kon"
     assert normalize_theme("unknown", ["default", "kon"]) == "default"
+
+
+def test_old_theme_file_inherits_new_roles_from_same_packaged_id(tmp_path):
+    path = tmp_path / "themes.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "themes": [
+                    {
+                        "id": "kon",
+                        "label": "K-ON!（轻音）",
+                        "colors": {"primary": "#c92f3a", "surface": "#fffdf9"},
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    themes = {theme.id: theme for theme in load_themes(path)}
+    kon = themes["kon"]
+    assert kon.color("primary") == "#c92f3a"
+    assert kon.color("text_tertiary") == "#7a5644"
+    assert kon.color("warning") == "#9a5b00"
+    assert kon.color("border_control") == "#9a7058"
 
 
 def test_settings_creates_theme_json_with_two_palettes(tmp_path):
@@ -62,8 +88,8 @@ def test_main_window_applies_saved_theme(tmp_path):
     service.settings["ui"]["theme"] = "kon"
     service.save()
     window = MainWindow(settings_path=path)
-    assert "#c92f3a" in app.styleSheet()
-    assert "#c92f3a" in window.styleSheet()
+    assert "#3869b2" in app.styleSheet()
+    assert "#3869b2" in window.styleSheet()
     window.close()
     app.setStyleSheet(application_stylesheet(1.0, "default"))
     app.processEvents()
@@ -84,6 +110,11 @@ def test_settings_dialog_gui_group_contains_theme_and_scale(tmp_path):
     values = dialog.values()
     assert values["ui"]["theme"] == "kon"
     assert values["ui"]["scale"] == service.ui_state["scale"]
+    assert [dialog.material_combo.itemData(i) for i in range(dialog.material_combo.count())] == ["liquid_glass", "solid"]
+    dialog.material_combo.setCurrentIndex(dialog.material_combo.findData("solid"))
+    dialog.animations_cb.setChecked(False)
+    assert dialog.values()["ui"]["material"] == "solid"
+    assert dialog.values()["ui"]["animations"] is False
     assert dialog.theme_preview is not None
     dialog.deleteLater()
     app.processEvents()

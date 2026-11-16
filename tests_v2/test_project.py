@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import numpy as np
 import pytest
 
@@ -21,7 +22,6 @@ def test_project_round_trip(synthetic_cv_runs, tmp_path):
         target_voltage=0.5,
         overrides={"line_width": 3.0, "label_size": 11.0},
         legend_templates={run.run_id: "{Scan_Rate}"},
-        follow_dataset=True,
     )
     path = tmp_path / "project.cvproj"
     save_project(
@@ -32,6 +32,10 @@ def test_project_round_trip(synthetic_cv_runs, tmp_path):
         cycle_selection={run.run_id: [1, 2]},
         plots=[spec],
     )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["plots"][0]["follow_dataset"] = True  # old v2 project
+    payload["plots"][0]["future_option"] = "preserved"
+    path.write_text(json.dumps(payload), encoding="utf-8")
     state = load_project(path)
     assert len(state.dataset.cv_runs) == 3
     loaded = next(run for run in state.dataset.cv_runs if run.params.area_cm2 == 0.5)
@@ -42,7 +46,40 @@ def test_project_round_trip(synthetic_cv_runs, tmp_path):
     assert state.plots[0].overrides["line_width"] == 3.0
     assert loaded.legend_template == "{CV_Voltage}-{Cycle_Number}"
     assert state.plots[0].legend_templates == {loaded.run_id: "{Scan_Rate}"}
-    assert state.plots[0].follow_dataset is True
+    assert "follow_dataset" not in state.plots[0].to_dict()
+    assert state.plots[0].to_dict()["future_option"] == "preserved"
+
+
+def test_project_embedded_preset_is_available_and_saved_without_modifying_global_presets(tmp_path, synthetic_cv_runs):
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from cvanalysis.plotting.presets import BUILTIN_PRESETS
+    from cvanalysis.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    style = BUILTIN_PRESETS["ieee-single"].to_dict()
+    style.update(name="project-only", label="Project style", custom_future_field="keep")
+    spec = PlotSpec("cv_overlay", [run.run_id for run in synthetic_cv_runs], preset="project-only")
+    source = tmp_path / "embedded.cvproj"
+    save_project(source, Dataset(cv_runs=list(synthetic_cv_runs)), plots=[spec], styles={"project-only": style})
+    expected_style = json.loads(source.read_text(encoding="utf-8"))["styles"]["project-only"]
+    state = load_project(source)
+    refresh_analysis(state.dataset)
+    window = MainWindow(settings_path=tmp_path / "settings.json")
+    window.show()
+    window._apply_project(state, source)
+    QTest.qWait(30)
+    assert window.preset_combo.currentData() == "project-only"
+    assert "project-only" not in window.settings_service.user_presets
+    menu = window._active_plot_tab()._build_settings_menu()
+    presets = next(action.menu() for action in menu.actions() if action.text() == "绘图预设")
+    assert any(action.isChecked() and action.text() == "Project style" for action in presets.actions())
+    output = tmp_path / "roundtrip.cvproj"
+    assert window._write_project(output)
+    assert json.loads(output.read_text(encoding="utf-8"))["styles"]["project-only"] == expected_style
+    menu.deleteLater()
+    window.close()
+    app.processEvents()
 
 
 def test_project_round_trip_preserves_new_analysis_options(tmp_path, synthetic_cv_runs):

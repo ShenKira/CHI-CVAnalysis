@@ -26,6 +26,10 @@ Thumbs.db
 
 # Temporary task workspaces
 /temp/
+/.local/
+/local_archive/
+/local_projects/
+/releases/
 
 # Nuitka build cache / versioned outputs
 /build_cache/
@@ -89,12 +93,19 @@ env/
 
 # Local handoff notes (may contain workspace state or local data names)
 /Vibe_Coding_Outline.md
+/Vibe_md/
 /docs/IMPLEMENTATION_LOG.md
 /README_LOCAL.md
+/docs/NEW_TECHNIQUES_HANDOFF.md
+/docs/GUI_AUDIT_20261116.md
+/docs/GUI_MAINLINE_MIGRATION_PLAN.md
+/docs/CONTEXT_MENU_PLAN.md
+/assets/icons/concepts-20261116/PROMPTS.md
 
 # Local release notes draft (copy into GitHub Release)
 /update_detailed.md
 
 # Local reference images / agent caches
 /KON!/
+/awesome-design-md-main/
 .opencode_cache/

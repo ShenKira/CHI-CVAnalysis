@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication
 from cvanalysis.analysis.cp import CPRunSummary
 from cvanalysis.analysis.cv import CVRunSummary
 from cvanalysis.analysis.eis import EISMetrics
-from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun, abbreviate_name
+from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun, SweepRun, abbreviate_name
 from cvanalysis.domain.units import (
     AREAL_CAPACITANCE,
     CAPACITANCE,
@@ -211,6 +211,8 @@ class DatasetTreeModel(QAbstractItemModel):
             self.dataset.cv_runs[:] = runs
         elif isinstance(runs[0], EISRun):
             self.dataset.eis_runs[:] = runs
+        elif isinstance(runs[0], SweepRun):
+            (self.dataset.lsv_runs if runs[0].kind == "lsv" else self.dataset.it_runs)[:] = runs
         else:
             self.dataset.cp_runs[:] = runs
         self.changePersistentIndexList(
@@ -230,7 +232,7 @@ class DatasetTreeModel(QAbstractItemModel):
             return None
         column = index.column()
         if role == Qt.CheckStateRole and column == 0 and node.kind in {"run", "cycle", "group"}:
-            return Qt.Checked if node.checked else Qt.Unchecked
+            return self._check_state(node)
         if role == Qt.DisplayRole:
             return self._display(node, column)
         if role == Qt.ToolTipRole:
@@ -256,7 +258,10 @@ class DatasetTreeModel(QAbstractItemModel):
         node = self._node(index)
         if node is None or node.kind not in {"run", "cycle", "group"}:
             return False
-        checked = value == Qt.Checked or value == 2
+        # QStyledItemDelegate passes the raw integer 0/2 here, while tests and
+        # direct callers may pass Qt.CheckState enums.  PySide6 does not treat
+        # int 0 and Qt.CheckState.Unchecked as equal, so handle both forms.
+        checked = value not in (Qt.CheckState.Unchecked, 0)
         if node.kind == "group":
             for child in node.children:
                 self._set_node_checked(child, checked)
@@ -271,6 +276,28 @@ class DatasetTreeModel(QAbstractItemModel):
             return self.root
         return index.internalPointer()
 
+    def _check_state(self, node: TreeNode):
+        """Return a truthful tri-state for groups and multi-cycle runs."""
+        if node.kind == "group":
+            if not node.children:
+                return Qt.Unchecked
+            states = [self._check_state(child) for child in node.children]
+            if all(state == Qt.Checked for state in states):
+                return Qt.Checked
+            if any(state in (Qt.Checked, Qt.PartiallyChecked) for state in states):
+                return Qt.PartiallyChecked
+            return Qt.Unchecked
+        if node.kind == "run" and isinstance(node.run, CVRun):
+            if not node.children:
+                return Qt.Checked if node.checked else Qt.Unchecked
+            states = [self._check_state(child) for child in node.children]
+            if all(state == Qt.Checked for state in states):
+                return Qt.Checked
+            if any(state in (Qt.Checked, Qt.PartiallyChecked) for state in states):
+                return Qt.PartiallyChecked
+            return Qt.Unchecked
+        return Qt.Checked if node.checked else Qt.Unchecked
+
     def _set_node_checked(self, node: TreeNode, checked: bool) -> None:
         node.checked = checked
         if node.kind == "run" and isinstance(node.run, CVRun):
@@ -280,7 +307,7 @@ class DatasetTreeModel(QAbstractItemModel):
             self.cycle_selection[node.run.run_id] = [child.cycle_index for child in node.children if checked]
             if len(self.cycle_selection[node.run.run_id]) == len(node.children):
                 self.cycle_selection.pop(node.run.run_id, None)
-        elif node.kind in {"run", "cycle"} and isinstance(node.run, (EISRun, CPRun)):
+        elif node.kind in {"run", "cycle"} and isinstance(node.run, (EISRun, CPRun, SweepRun)):
             self.visible_runs[node.run.run_id] = checked
         elif node.kind == "cycle" and node.parent and isinstance(node.parent.run, CVRun):
             run_id = node.parent.run.run_id
@@ -309,6 +336,17 @@ class DatasetTreeModel(QAbstractItemModel):
             first = self.index(0, 0, self.index_for_node(node))
             last = self.index(len(node.children) - 1, len(COLUMNS) - 1, self.index_for_node(node))
             self.dataChanged.emit(first, last)
+        # Tri-state checkboxes live on run/group rows while the edit originates
+        # on a cycle row; refresh the whole ancestor chain so the view repaints.
+        current = node.parent
+        while current is not None and current is not self.root:
+            index = self.index_for_node(current)
+            if index.isValid():
+                self.dataChanged.emit(
+                    index,
+                    index.sibling(index.row(), len(COLUMNS) - 1),
+                )
+            current = current.parent
 
     def index_for_node(self, node: TreeNode | None) -> QModelIndex:
         if node is None or node is self.root:
@@ -340,8 +378,15 @@ class DatasetTreeModel(QAbstractItemModel):
                 continue
             if kind == "cp" and not isinstance(run, CPRun):
                 continue
-            if self.visible_runs.get(run.run_id, True):
-                result.append(run.run_id)
+            if kind in {"lsv", "it"} and not (isinstance(run, SweepRun) and run.kind == kind):
+                continue
+            if not self.visible_runs.get(run.run_id, True):
+                continue
+            if isinstance(run, CVRun):
+                selected = self.cycle_selection.get(run.run_id)
+                if selected is not None and not selected:
+                    continue
+            result.append(run.run_id)
         return result
 
     def selected_cycle_indices(self, run_id: str) -> list[int] | None:
@@ -394,6 +439,13 @@ class DatasetTreeModel(QAbstractItemModel):
             for run in dataset.cp_runs:
                 self._add_cp_run(cp_group, run)
             cp_group.checked = any(child.checked for child in cp_group.children)
+        for kind, runs, label in (("lsv", dataset.lsv_runs, "LSV 数据"), ("it", dataset.it_runs, "I-T 数据")):
+            if runs:
+                group = TreeNode("group", label, self.root, checked=True)
+                self.root.children.append(group)
+                for run in runs:
+                    self._add_eis_run(group, run)
+                group.checked = any(child.checked for child in group.children)
         self.endResetModel()
         self.selection_changed.emit()
 
@@ -490,6 +542,11 @@ class DatasetTreeModel(QAbstractItemModel):
                 return f"{len(run.freq)} 点"
             if column == 5:
                 return _status_for_run(run)
+        elif isinstance(run, SweepRun):
+            if column == 4:
+                return f"{len(run.x)} 点"
+            if column == 5:
+                return "正常" if not run.warnings else "有提示"
         elif isinstance(run, CPRun):
             summary = run.summary if isinstance(run.summary, CPRunSummary) else None
             if column == 2:
@@ -542,10 +599,12 @@ class DatasetTreeModel(QAbstractItemModel):
                 if run.metadata.low_freq and run.metadata.high_freq
                 else f"{len(run.freq)} 点"
             )
+        elif isinstance(run, SweepRun):
+            lines.append(f"{run.kind.upper()} · {len(run.x)} 点")
         else:
             current = format_with_unit(run.applied_current_A, CURRENT, digits=3)
-            hold = "含保持段电流" if run.has_hold_data else "无保持段电流"
-            lines.append(f"CP · 电流 {current} · 窗口 {run.voltage_window or 0:.3g} V · {hold}")
+            hold = run.hold_description()
+            lines.append(f"CP · 电流 {current} · 窗口 {run.voltage_window or 0:.3g} V" + (f" · {hold}" if hold else ""))
         if node.kind == "cycle" and isinstance(run, CVRun) and node.cycle_index is not None:
             cycle = next((item for item in run.cycles if item.index == node.cycle_index), None)
             if cycle is not None:

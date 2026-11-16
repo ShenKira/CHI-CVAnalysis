@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, QPersistentModelIndex, Qt
+from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QAbstractItemView
 
 from cvanalysis.domain.models import Dataset
@@ -104,7 +105,6 @@ def test_drag_updates_existing_plots_selection_and_previews(tmp_path, synthetic_
     tab = next(window.tabs.widget(i) for i in range(window.tabs.count())
                if window.tabs.widget(i).spec.kind == "cv_overlay")
     selected = runs[1]
-    tab.spec.follow_dataset = False
     tab.spec.run_ids = [selected.run_id]
     tab.spec.cycle_selection = {selected.run_id: [2]}
     window._select_run_ids([selected.run_id])
@@ -127,5 +127,69 @@ def test_drag_updates_existing_plots_selection_and_previews(tmp_path, synthetic_
     assert data_dialog._run_items[selected.run_id].child(1).text(2) == "F1-C2"
     dialog.close()
     data_dialog.close()
+    window.close()
+    app.processEvents()
+
+def test_dataset_tree_checkboxes_expose_partial_state(synthetic_cv_runs):
+    app = QApplication.instance() or QApplication([])
+    run = synthetic_cv_runs[0]
+    dataset = Dataset(cv_runs=[run])
+    model = DatasetTreeModel()
+    model.set_dataset(dataset)
+    group = model.index(0, 0)
+    run_index = model.index(0, 0, group)
+    first_cycle = model.index(0, 0, run_index)
+
+    assert model.data(run_index, Qt.CheckStateRole) == Qt.Checked
+    changed = []
+    model.dataChanged.connect(
+        lambda top_left, bottom_right: changed.append((top_left, bottom_right))
+    )
+    # The Qt item delegate passes raw integers (0 = unchecked), not enums.
+    model.setData(first_cycle, 0, Qt.CheckStateRole)
+    assert model.data(run_index, Qt.CheckStateRole) == Qt.PartiallyChecked
+    assert model.data(group, Qt.CheckStateRole) == Qt.PartiallyChecked
+    assert model.visible_run_ids("cv") == [run.run_id]
+    assert any(
+        top_left.parent() == group and top_left.row() == run_index.row()
+        for top_left, _ in changed
+    )
+    assert any(
+        top_left.row() == group.row() and not top_left.parent().isValid()
+        for top_left, _ in changed
+    )
+
+    for row in range(model.rowCount(run_index)):
+        model.setData(model.index(row, 0, run_index), Qt.Unchecked, Qt.CheckStateRole)
+    assert model.data(run_index, Qt.CheckStateRole) == Qt.Unchecked
+    assert model.data(group, Qt.CheckStateRole) == Qt.Unchecked
+    assert model.visible_run_ids("cv") == []
+    app.processEvents()
+
+
+def test_tree_checkbox_mouse_click_toggles_run(tmp_path, synthetic_cv_runs):
+    from cvanalysis.ui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(settings_path=tmp_path / "click.json")
+    window.resize(1200, 800)
+    window.show()
+    app.processEvents()
+    window._on_import_complete(Dataset(cv_runs=list(synthetic_cv_runs)), [])
+    app.processEvents()
+    run = synthetic_cv_runs[0]
+    index = window.dataset_model.index_for_run(run.run_id)
+    window.tree.scrollTo(index)
+    app.processEvents()
+    rect = window.tree.visualRect(index)
+    assert window.dataset_model.data(index, Qt.CheckStateRole) == Qt.Checked
+    QTest.mouseClick(
+        window.tree.viewport(),
+        Qt.LeftButton,
+        pos=QPoint(rect.x() + 10, rect.y() + rect.height() // 2),
+    )
+    app.processEvents()
+    assert window.dataset_model.data(index, Qt.CheckStateRole) == Qt.Unchecked
+    assert window.dataset_model.visible_runs[run.run_id] is False
     window.close()
     app.processEvents()

@@ -121,35 +121,43 @@ def test_quick_style_dialog_and_plot_tab_overrides(tmp_path, synthetic_cv_runs):
     app.processEvents()
 
 
-def test_non_default_preset_opens_quick_style_dialog(tmp_path, synthetic_cv_runs):
+def test_quick_style_reset_uses_clean_base_style():
+    from cvanalysis.plotting.presets import BUILTIN_PRESETS
+    from cvanalysis.ui.dialogs.quick_style_dialog import QuickStyleDialog
+
+    app = QApplication.instance() or QApplication([])
+    base = BUILTIN_PRESETS["daily"]
+    overridden = base.with_overrides({"line_width": 4.0})
+    dialog = QuickStyleDialog(
+        overridden,
+        "日常分析",
+        base_style=base,
+    )
+    assert dialog.line_width_spin.value() == 4.0
+    dialog._reset_to_base()
+    assert abs(dialog.line_width_spin.value() - base.line_width) < 1e-9
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_non_default_preset_applies_without_modal_and_preserves_overrides(
+    tmp_path, synthetic_cv_runs
+):
     from unittest.mock import patch
-    from PySide6.QtCore import QObject, Signal
-    from PySide6.QtWidgets import QDialog
     from cvanalysis.domain.models import Dataset
     from cvanalysis.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
-
-    class FakeDialog(QObject):
-        apply_requested = Signal(dict)
-        save_requested = Signal(dict)
-
-        def __init__(self, style, preset_name, parent=None):
-            super().__init__(parent)
-            self.style = style
-            self.preset_name = preset_name
-
-        def exec(self):
-            self.apply_requested.emit({"line_width": 4.0, "xlabel_size": 12.0})
-            return QDialog.Rejected
-
     window = MainWindow(settings_path=tmp_path / "config.json")
     window._on_import_complete(Dataset(cv_runs=list(synthetic_cv_runs)), [])
     app.processEvents()
-    with patch("cvanalysis.ui.main_window.QuickStyleDialog", FakeDialog):
+    tab = window.tabs.currentWidget()
+    tab.spec.overrides = {"line_width": 4.0, "xlabel_size": 12.0}
+    with patch("cvanalysis.ui.main_window.QuickStyleDialog") as dialog_class:
         index = window.preset_combo.findData("ieee-single")
         window.preset_combo.setCurrentIndex(index)
         app.processEvents()
+        dialog_class.assert_not_called()
     tab = window.tabs.currentWidget()
     assert tab.spec.preset == "ieee-single"
     assert tab.spec.overrides["line_width"] == 4.0
@@ -200,7 +208,7 @@ def test_long_filename_is_shortened_in_tree_and_detail_label(tmp_path, synthetic
     window.close()
 
 
-def test_plot_selection_is_per_tab_and_defaults_follow_checked_runs(tmp_path, synthetic_cv_runs):
+def test_plot_selection_is_per_tab_and_new_plots_use_checked_runs(tmp_path, synthetic_cv_runs):
     from PySide6.QtCore import Qt
     from cvanalysis.domain.models import Dataset
     from cvanalysis.ui.main_window import MainWindow
@@ -215,26 +223,18 @@ def test_plot_selection_is_per_tab_and_defaults_follow_checked_runs(tmp_path, sy
         if window.tabs.widget(i).spec.kind == "cv_overlay"
     )
     assert len(overlay.spec.run_ids) == len(synthetic_cv_runs)
-    assert overlay.spec.follow_dataset is True
+    original_ids = list(overlay.spec.run_ids)
 
     first = synthetic_cv_runs[0]
     index = window.dataset_model.index_for_run(first.run_id)
     window.dataset_model.setData(index, Qt.Unchecked, Qt.CheckStateRole)
     app.processEvents()
-    assert set(overlay.spec.run_ids) == {run.run_id for run in synthetic_cv_runs[1:]}
-
-    overlay.follow_cb.setChecked(False)
-    app.processEvents()
-    assert overlay.spec.follow_dataset is False
+    assert overlay.spec.run_ids == original_ids
     second = synthetic_cv_runs[1]
     second_index = window.dataset_model.index_for_run(second.run_id)
     window.dataset_model.setData(second_index, Qt.Unchecked, Qt.CheckStateRole)
     app.processEvents()
-    assert set(overlay.spec.run_ids) == {run.run_id for run in synthetic_cv_runs[1:]}
-
-    overlay.follow_cb.setChecked(True)
-    app.processEvents()
-    assert overlay.spec.run_ids == [synthetic_cv_runs[2].run_id]
+    assert overlay.spec.run_ids == original_ids
 
     window._request_plot("cv_cap_scan")
     app.processEvents()
@@ -252,7 +252,7 @@ def test_plot_selection_is_per_tab_and_defaults_follow_checked_runs(tmp_path, sy
         if window.tabs.widget(i).spec.kind == "cv_overlay"
     ][-1]
     assert explicit.spec.run_ids == [first.run_id]
-    assert explicit.spec.follow_dataset is False
+    assert "follow_dataset" not in explicit.spec.to_dict()
     window.close()
 
 
@@ -334,7 +334,7 @@ def test_main_window_applies_legend_template_and_plot_data_dialog(tmp_path, synt
     assert overlay.spec.run_ids == [run.run_id]
     assert overlay.spec.cycle_selection == {run.run_id: [1]}
     assert overlay.spec.legend_templates == {run.run_id: "{Scan_Rate}"}
-    assert overlay.spec.follow_dataset is False
+    assert "follow_dataset" not in overlay.spec.to_dict()
     window.close()
 
 

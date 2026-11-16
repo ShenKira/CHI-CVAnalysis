@@ -6,6 +6,7 @@ import math
 import warnings
 
 from matplotlib.backends.backend_agg import RendererAgg
+from cvanalysis.plotting.legend import legend_sources, remember_legend_sources
 
 
 PAPER_LEGEND_PLACEMENTS = {"auto", "inside", "outside"}
@@ -140,6 +141,7 @@ def _make_legend(
             bbox_to_anchor=anchor,
             **common,
         )
+    remember_legend_sources(legend, handles, labels)
     style.style_legend(legend)
     return legend
 
@@ -249,12 +251,7 @@ def _rebuild_inside_legends(figure, spec, style, requested_columns):
         old = ax.get_legend()
         if old is None:
             continue
-        handles, labels = ax.get_legend_handles_labels()
-        if old.legend_handles and old.get_texts():
-            # CP capacity can put ax2 efficiency handles into ax's legend.
-            # Recollecting only from ax would silently drop those entries.
-            handles = list(old.legend_handles)
-            labels = [text.get_text() for text in old.get_texts()]
+        handles, labels = legend_sources(ax, old)
         old.remove()
         if not labels:
             continue
@@ -523,10 +520,7 @@ def fit_standard_legends(figure, spec, style):
         legend = ax.get_legend()
         if legend is None:
             continue
-        handles, labels = ax.get_legend_handles_labels()
-        if legend.legend_handles and legend.get_texts():
-            handles = list(legend.legend_handles)
-            labels = [text.get_text() for text in legend.get_texts()]
+        handles, labels = legend_sources(ax, legend)
         if not handles or not labels:
             legend.remove()
             continue

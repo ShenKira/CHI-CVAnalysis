@@ -24,6 +24,68 @@ if str(ROOT) not in sys.path:
 from cvanalysis.domain.models import CVRun  # noqa: E402
 
 
+@pytest.fixture(scope="session")
+def test_application():
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def isolated_qt_state(test_application):
+    """Own test windows and restore process-wide Qt state after each test.
+
+    close() only hides a QWidget by default. Leaving those trees alive lets
+    their timers and application-wide stylesheet work spill into later tests.
+    Keep one session QApplication and explicitly finish deferred destruction.
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent, Qt
+    from PySide6.QtGui import QFont, QIcon, QPalette
+    from PySide6.QtWidgets import QApplication
+    from shiboken6 import isValid
+    from cvanalysis.ui.theme import current_theme, set_current_theme
+
+    qapp = test_application
+    existing = set(qapp.topLevelWidgets())
+    qss, font = qapp.styleSheet(), QFont(qapp.font())
+    icon, palette = QIcon(qapp.windowIcon()), QPalette(qapp.palette())
+    theme = current_theme()
+    effects = {effect: QApplication.isEffectEnabled(effect)
+               for effect in (Qt.UI_AnimateCombo, Qt.UI_AnimateMenu)}
+    translator = getattr(qapp, "_qt_translator", None)
+    yield
+    for widget in qapp.topLevelWidgets():
+        if widget in existing or not isValid(widget) or widget.parentWidget() is not None:
+            continue
+        # Never destroy a live worker to make a test appear to pass.
+        tasks = getattr(widget, "_tasks", ())
+        thread = getattr(widget, "import_thread", None)
+        if tasks or (thread is not None and isValid(thread) and thread.isRunning()):
+            pytest.fail("Test left a window with a running background task")
+        if hasattr(widget, "_mark_clean"):
+            widget._mark_clean()
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    qapp.processEvents()
+    set_current_theme(theme)
+    if qapp.styleSheet() != qss:
+        qapp.setStyleSheet(qss)
+    qapp.setFont(font)
+    qapp.setWindowIcon(icon)
+    qapp.setPalette(palette)
+    for effect, enabled in effects.items():
+        QApplication.setEffectEnabled(effect, enabled)
+    current_translator = getattr(qapp, "_qt_translator", None)
+    if current_translator is not None and current_translator is not translator:
+        qapp.removeTranslator(current_translator)
+        current_translator.deleteLater()
+        if translator is None:
+            del qapp._qt_translator
+        else:
+            qapp._qt_translator = translator
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
 def make_cv_text(
     *,
     scan_rate: float,

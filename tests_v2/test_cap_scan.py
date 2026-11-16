@@ -7,12 +7,47 @@ import numpy as np
 import pytest
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.colors import to_hex
 from PySide6.QtWidgets import QApplication
 
 from cvanalysis.domain.models import Dataset
 from cvanalysis.plotting.cv_renderer import draw_cap_scan
 from cvanalysis.plotting.presets import BUILTIN_PRESETS
 from cvanalysis.plotting.spec import PlotSpec
+
+
+@pytest.mark.parametrize("placement", ["normal", "inside", "outside"])
+@pytest.mark.parametrize("error_bars", [False, True])
+def test_cap_scan_measured_marker_survives_legend_rebuild(synthetic_cv_runs, placement, error_bars):
+    from cvanalysis.plotting.export import render_plot
+    from cvanalysis.plotting.paper import finish_paper, fit_standard_legends, paper_overrides
+
+    layout = {"enabled": placement != "normal", "fraction": .33, "text_width_mm": 160,
+              "body_pt": 10, "legend_placement": placement, "legend_columns": "auto"}
+    spec = PlotSpec("cv_cap_scan", [run.run_id for run in synthetic_cv_runs],
+                    paper_layout=layout,
+                    analysis_options={"error_bars": error_bars, "fit_method": "coordinate_line",
+                                      "color_overrides": {"#0072b2": "#0000ff"}})
+    base = BUILTIN_PRESETS["ieee-single"]
+    style = base.with_overrides(paper_overrides(layout, base))
+    figure = Figure(figsize=style.figure_size, dpi=100)
+    FigureCanvasAgg(figure)
+    render_plot(figure, Dataset(cv_runs=synthetic_cv_runs), spec, style)
+
+    def check_marker():
+        legend = figure.legends[0] if figure.legends else figure.axes[0].get_legend()
+        assert legend is not None and "Measured" in [text.get_text() for text in legend.get_texts()]
+        markers = [line for line in legend.findobj(Line2D) if line.get_marker() == "o"]
+        assert markers, "Measured legend lost its visible marker"
+        assert any(to_hex(line.get_markerfacecolor()) == "#0000ff" for line in markers)
+
+    check_marker()
+    if placement == "normal":
+        fit_standard_legends(figure, spec, style)
+    else:
+        finish_paper(figure, spec, style)
+    check_marker()
 
 
 def test_cap_scan_linear_fit_and_independent_switches(synthetic_cv_runs):

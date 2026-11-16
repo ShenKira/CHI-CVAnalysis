@@ -16,6 +16,20 @@ def test_fresh_settings(tmp_path):
     assert data["schema_version"] == 2
 
 
+def test_material_settings_round_trip_and_old_economy_migrates(tmp_path):
+    path = tmp_path / "config.json"
+    service = SettingsService(path)
+    service.settings["ui"].update(material="solid", animations=False)
+    service.save()
+    restored = SettingsService(path)
+    assert restored.ui_state["material"] == "solid"
+    assert restored.ui_state["animations"] is False
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["ui"]["material"] = "economy"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert SettingsService(path).ui_state["material"] == "liquid_glass"
+
+
 def test_v1_migration_preserves_unknown_keys_and_values(tmp_path):
     v1 = {
         "plot": {

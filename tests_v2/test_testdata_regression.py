@@ -17,7 +17,7 @@ TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
 
 @pytest.mark.skipif(not TESTDATA.exists(), reason="testdata directory is not present")
 def test_multi_cv_testdata_overlay_geometry():
-    paths = sorted(str(path) for path in TESTDATA.glob("*_CV_*.txt"))[:9]
+    paths = sorted(str(path) for path in TESTDATA.rglob("*_CV_*.txt"))[:9]
     if len(paths) < 2:
         pytest.skip("not enough CV testdata files")
     dataset, issues = load_files(paths)
@@ -51,7 +51,7 @@ def test_multi_cv_testdata_overlay_geometry():
 
 @pytest.mark.skipif(not TESTDATA.exists(), reason="testdata directory is not present")
 def test_long_names_paper_outside_legend_keeps_all_entries():
-    paths = sorted(str(path) for path in TESTDATA.glob("*_CV_*.txt"))[:9]
+    paths = sorted(str(path) for path in TESTDATA.rglob("*_CV_*.txt"))[:9]
     if len(paths) < 2:
         pytest.skip("not enough CV testdata files")
     dataset, issues = load_files(paths)

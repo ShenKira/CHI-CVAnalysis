@@ -793,8 +793,6 @@ def analyze_cp_run(run: CPRun, *, force: bool = False) -> CPRunSummary:
     completed = sum(1 for segment in segments if segment.hold is not None)
     if not cycles:
         warnings.append("未找到完整的“充电→放电”循环，无法计算 GCD 容量")
-    if segments and not holds:
-        warnings.append("文件未记录保持段电流；电位-时间图仅使用原始活动电流区间")
     summary = CPRunSummary(
         cycles=cycles,
         segments=segments,

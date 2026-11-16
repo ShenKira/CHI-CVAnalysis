@@ -74,6 +74,7 @@ class ResultsPanel(QWidget):
             ["文件", "扫速", "循环", "有效", "平均电容", "C/A", "C/m", "SD", "CV%", "备注"]
         )
         self.cv_table.setModel(self.cv_model)
+        self.cv_model.numeric_columns = {1, 2, 3, 4, 5, 6, 7, 8}
         self._configure_table(self.cv_table)
         self.cv_columns = ViewColumns(self.cv_table, first_width=180)
 
@@ -82,6 +83,7 @@ class ResultsPanel(QWidget):
             ["文件", "Rs", "Rct", "f0", "Cdl", "相位@1Hz", "低频 |Z|", "备注"]
         )
         self.eis_table.setModel(self.eis_model)
+        self.eis_model.numeric_columns = {1, 2, 3, 4, 5, 6}
         self._configure_table(self.eis_table)
         self.eis_columns = ViewColumns(self.eis_table, first_width=180)
 
@@ -90,6 +92,7 @@ class ResultsPanel(QWidget):
             ["文件", "循环", "放电容量", "比容量", "库伦效率", "IR 降", "保持段", "备注"]
         )
         self.cp_table.setModel(self.cp_model)
+        self.cp_model.numeric_columns = {1, 2, 3, 4, 5}
         self._configure_table(self.cp_table)
         self.cp_columns = ViewColumns(self.cp_table, first_width=180)
 
@@ -110,11 +113,17 @@ class ResultsPanel(QWidget):
                 )
             )
 
-        self.results_tabs.addTab(self.cv_table, "CV 结果")
-        self.results_tabs.addTab(self.eis_table, "EIS 结果")
-        self.results_tabs.addTab(self.cp_table, "CP / GCD 结果")
+        self.results_tabs.setElideMode(Qt.ElideRight)
+        self.results_tabs.setUsesScrollButtons(True)
+        self.results_tabs.addTab(self.cv_table, "CV")
+        self.results_tabs.addTab(self.eis_table, "EIS")
+        self.results_tabs.addTab(self.cp_table, "CP/GCD")
+        self.results_tabs.setTabToolTip(0, "CV 逐循环结果")
+        self.results_tabs.setTabToolTip(1, "EIS 拟合与几何指标")
+        self.results_tabs.setTabToolTip(2, "CP / GCD 容量、效率与 IR 降")
         fit_columns_btn = QPushButton("适配列宽")
         fit_columns_btn.setProperty("secondary", True)
+        fit_columns_btn.setProperty("pill", True)
         fit_columns_btn.setToolTip("按内容适配当前结果表；也可拖动或双击列边界。")
         fit_columns_btn.clicked.connect(self._fit_current)
         self.results_tabs.setCornerWidget(fit_columns_btn)
@@ -122,6 +131,7 @@ class ResultsPanel(QWidget):
 
     @staticmethod
     def _configure_table(table: QTreeView) -> None:
+        table.setProperty("structuralView", True)
         table.setAlternatingRowColors(True)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setWordWrap(False)
@@ -438,7 +448,8 @@ class ResultsPanel(QWidget):
         cp_child_colors = {}
         for row_index, run in enumerate(cp_runs or []):
             summary = run.summary if isinstance(run.summary, CPRunSummary) else None
-            remark = "；".join(summary.warnings[:1]) if summary and summary.warnings else ""
+            actual_warning = "；".join(summary.warnings[:1]) if summary and summary.warnings else ""
+            remark = "；".join(value for value in (run.hold_description(), actual_warning) if value)
             capacity = (
                 f"{summary.mean_discharge_capacity_C / 3.6:.4g} mAh"
                 if summary and summary.mean_discharge_capacity_C == summary.mean_discharge_capacity_C
@@ -466,12 +477,12 @@ class ResultsPanel(QWidget):
                 specific,
                 efficiency,
                 ir_drop,
-                "含记录" if summary and summary.has_hold_data else "无",
+                "含记录" if run.has_hold_data else "有配置" if run.hold_description() else "—",
                 remark,
             ]
             cp_rows.append(row)
             cp_run_ids.append(run.run_id)
-            if remark:
+            if actual_warning:
                 cp_colors[(row_index, 7)] = theme_color("error")
 
             child_rows = []

@@ -309,6 +309,7 @@ class PlotStyle:
             "font.sans-serif": families,
             "font.size": self.font_size,
             "mathtext.fontset": self.math_fontset,
+            "text.usetex": False,
             "axes.unicode_minus": False,
             "figure.facecolor": self.figure_facecolor,
             "axes.facecolor": self.axes_facecolor,

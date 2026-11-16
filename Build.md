@@ -1,282 +1,73 @@
-# CVAnalysis v2 Build 交接说明
+# Windows 构建与发布
 
-> 状态（2026-11-06）：v2.0.2 的 **StandAlone** 与 **OneFile** 均已构建成功并通过启动验证。
-> 本文记录已验证环境、关键根因、构建命令和验证方法，供下一位接手构建/发布的 Agent 或开发者使用。
+当前发布版本：**2.1.0**（2026-11-17）。构建结果和验收记录见下文；历史版本的二进制与校验信息以 GitHub Release 为准。
 
-## 1. 已验证产物
+## 构建环境
 
-### v2.0.2
-
-| 产物 | 路径 | 大小 | SHA256 |
-| --- | --- | ---: | --- |
-| StandAlone | `CVAnalysis_StandAlone_v2.0.2\start_gui.dist\CVAnalysis_v2.0.2.exe` | 126,932,480 | `CA910960CD77BA87918D55EC9BB570E60275A87F521A5377CF2F090DC18C7CED` |
-| OneFile | `CVAnalysis_OneFile_v2.0.2\CVAnalysis_v2.0.2.exe` | 336,658,432 | `A13656ED04AAA45CD79106A425C9846872F2CC8D80747F4D3575E60C9DD0665E` |
-
-- 文件版本资源：`2.0.2.0`（StandAlone / OneFile 均验证）。
-- 离屏 StandAlone 启动到 `WaitForInputIdle`：约 4.84 s，随后保持运行。
-- OneFile 冷启动：解压目录 `%TEMP%\CVAnalysis\onefile_35440_*` 正常创建，子进程保持运行；无崩溃记录。
-- StandAlone 包含 `cvanalysis\default_themes.json` 及 `ffi.dll`、`libexpat.dll`、Qt 平台插件等关键文件。
-- 构建日志：`build_cache\logs\build_v2.0.2_20261106_202631.log`（本地忽略，不提交）；仅 Nuitka 4.3.1 版本提示，无构建错误。
-
-### v2.0.1（历史）
-
-| 产物 | 路径 | 大小 | SHA256 |
-| --- | --- | ---: | --- |
-| StandAlone | `CVAnalysis_StandAlone_v2.0.1\start_gui.dist\CVAnalysis_v2.0.1.exe` | 126,563,328 | `05594C05C8586CB6DB43A8097394646379F340301A14C6DCF7D206C401D32C60` |
-| OneFile | `CVAnalysis_OneFile_v2.0.1\CVAnalysis_v2.0.1.exe` | 336,285,696 | `38939BECFC7F366A13FB3E812107F459038CC37F1645FFF70DF131A2272AB49F` |
-
-- 文件版本资源：`2.0.1.0`（StandAlone / OneFile 均验证）。
-- 离屏 StandAlone 启动到 `WaitForInputIdle`：约 4.96 s。
-- 带窗口 OneFile 冷启动到 `WaitForInputIdle`：约 28.09 s（首次解压 336 MB）。
-- 构建日志：`build_cache\logs\build_v2.0.1_20261103.log`（本地忽略，不提交）。
-
-### v2.0.0（历史）
-
-| 产物 | 路径 | 大小 | SHA256 |
-| --- | --- | ---: | --- |
-| StandAlone | `CVAnalysis_StandAlone_v2.0.0\start_gui.dist\CVAnalysis_v2.0.0.exe` | 126,188,032 | `993591DA1154980C15FCBD039F68D89D33CBC613F451503CD049EF2EF0D6D9C4` |
-| OneFile | `CVAnalysis_OneFile_v2.0.0\CVAnalysis_v2.0.0.exe` | 335,910,912 | `E61C02B0F2E469A302791FF3A74B65EABD695994DC2E5437BC592C799E56AAE2` |
-
-- 重新构建后大小和 SHA256 会变化，发布前重新记录。
-- StandAlone 是推荐分发形式；OneFile 是单文件，启动时解压到 `%TEMP%\CVAnalysis\onefile_*`。
-- 两个 exe 均未签名，仍可能触发 Windows SmartScreen 或杀毒软件误报；正式分发建议代码签名。
-
-## 2. 已验证构建环境
-
-- Python：3.11.14（Anaconda），`%USERPROFILE%\.conda\envs\nuitka_pack\python.exe`
-- Nuitka：4.3.1
-- 编译器：MSVC 14.5（VS 18 BuildTools，Nuitka `--msvc=latest` 自动探测）
-- PySide6：6.9.2（**必须 `<6.10`**；6.10.2 会在图例对话框触发原生崩溃）
-- NumPy：2.4.2
-- SciPy：1.17.1
-- pandas：3.1.0
-- matplotlib：3.10.8
-- pytest / pytest-qt：9.2.0 / 4.5.0（仅开发测试）
-- 构建选项：`--enable-plugin=pyside6`、`--include-data-files=cvanalysis/default_themes.json=cvanalysis/default_themes.json`、`--lto=no`、`--onefile-no-compression`
-
-源码测试基线（`nuitka_pack` 环境）：
-
-```text
-248 passed, 0 warnings
-```
-
-多 CV 长文件名图例的 tight-layout 警告已消除；pytest 在打印全部通过结果后仍可能以 teardown 访问冲突退出（本机实测 `-1073741819`），无测试失败摘要，不阻塞打包。主题模板 `cvanalysis/default_themes.json` 会随 StandAlone / OneFile 一起打包。
-
-## 3. 关键根因与修复（必读）
-
-### 3.1 Anaconda `Library\bin` 未加入 PATH，导致 standalone 缺少 `ffi.dll` / `libexpat.dll`
-
-**现象：**
-
-- StandAlone 或 OneFile 启动立即退出，退出码 `0xC0000409`（`FAST_FAIL_FATAL_APP_EXIT`）。
-- `%LOCALAPPDATA%\CVAnalysis\logs\startup_error.log` 中崩溃在 `numpy._core._internal` → `ctypes` → `_ctypes`。
-- 设置 `PYTHONVERBOSE=1` 后可看到：
-
-```text
-import _ctypes ...
-# destroy ctypes
-Fatal Python error: Aborted
-```
-
-**原因：**
-
-- `_ctypes.pyd` 依赖 `ffi.dll`；`pyexpat.pyd` 依赖 `libexpat.dll`。
-- Anaconda 把这些 DLL 放在 `%CONDA_PREFIX%\Library\bin`。
-- 之前 `build.bat` 直接调用 `python.exe -m nuitka`，没有像 `conda activate` 那样把 `Library\bin` 加入 PATH。
-- Nuitka 的 DLL 依赖扫描因此漏掉这些 DLL；旧的 DLL 依赖缓存还可能继续保留“未找到”的结果。
-
-**修复：**
-
-- `build.bat` 在调用 Nuitka 前，把 conda 环境的以下目录前置到 PATH：
-  - `%PYTHON_ENV%`
-  - `%PYTHON_ENV%\Library\mingw-w64\bin`
-  - `%PYTHON_ENV%\Library\usr\bin`
-  - `%PYTHON_ENV%\Library\bin`
-  - `%PYTHON_ENV%\Scripts`
-  - `%PYTHON_ENV%\bin`
-- 首次在 PATH/Nuitka/Python 变化后构建时，设置 `CVANALYSIS_FORCE_DLL_CACHE=1`，强制刷新 DLL 依赖缓存。
-- `build.bat` 在 StandAlone 构建后检查 `start_gui.dist\ffi.dll`，缺失则失败。
-- 已验证 StandAlone 中包含：`ffi.dll`、`libexpat.dll`、`libssl-3-x64.dll`、`libcrypto-3-x64.dll`、`liblzma.dll`、`libbz2.dll`、`sqlite3.dll`。
-
-如果未来仍然缺少 `ffi.dll`，可显式加入：
-
-```bat
---include-data-files="%PYTHON_ENV%\Library\bin\ffi.dll=."
-```
-
-但应先确认 PATH 修复和依赖缓存刷新没有生效，避免与依赖扫描重复。
-
-### 3.2 NumPy 2.4 移除了 `np.trapz`
-
-`getattr(np, "trapezoid", np.trapz)` 会先求值 `np.trapz`，而 NumPy 2.4 已删除该别名，导致模块导入直接失败。
-
-已修复：
-
-- `cvanalysis/analysis/cp.py`
-- `cvanalysis/analysis/cv.py`
-- `cvanalysis/compat/legacy_cv.py`
-
-统一使用：
-
-```python
-try:
-    _trapz = np.trapezoid
-except AttributeError:
-    _trapz = np.trapz
-```
-
-### 3.3 PySide6 6.10.2 原生崩溃
-
-PySide6 6.10.2 在 `LegendTemplateDialog` 构造时连接 `textChanged` 信号会触发 access violation；同一测试在 6.9.2 下通过。
-
-已处理：
-
-- `nuitka_pack` 环境使用 PySide6 6.9.2。
-- `requirements.txt` 和 `pyproject.toml` 固定为 `PySide6>=6.6,<6.10`。
-
-相关 Nuitka 上游问题：
-
-- `#4004`：PySide6 信号连接问题，4.3/4.3.1 已修复。
-- `#4102`：Nuitka 4.3.1 + PySide6 退出阶段断言，Factory 4.4 已修复。
-- 如果打包后出现退出崩溃，可考虑 Nuitka Factory 或调整 PySide6 版本；当前 6.9.2 构建已验证可用。
-
-### 3.4 Defender / clcache
-
-- Defender 可能锁定 `build_cache\clcache` 或 exe，Nuitka 会自动重试；日志中可能出现 `Disable Anti-Virus` 警告。
-- 历史上 OneFile 解压出的 `main.dll` 曾被误判并删除：`Trojan:Win32/Wacatac.H!ml`。
-- 建议在构建机以管理员 PowerShell 添加排除项：
+- Windows x64，Python 3.11.14（Anaconda `nuitka_pack`）。
+- Nuitka 4.3.1，MSVC 14.5，PySide6 6.9.2。
+- NumPy 2.4.2、SciPy 1.17.1、pandas 3.1.0、Matplotlib 3.10.8。
+- 运行依赖以 `pyproject.toml` 为准；PySide6 限制 `<6.10`，避免已观察到的原生崩溃。
 
 ```powershell
-$root = (Resolve-Path .).Path
-Add-MpPreference -ExclusionPath "$root\build_cache"
-Add-MpPreference -ExclusionPath "$root\CVAnalysis_OneFile_v2.0.2"
-Add-MpPreference -ExclusionPath "$root\CVAnalysis_StandAlone_v2.0.2"
-Add-MpPreference -ExclusionPath "$env:TEMP\CVAnalysis"
-Add-MpPreference -ExclusionProcess "CVAnalysis_v2.0.2.exe"
-Add-MpPreference -ExclusionProcess "cl.exe"
+# 可指定另一套已安装依赖和 Nuitka 的 Python
+$env:CVANALYSIS_PYTHON = 'C:\path\to\env\python.exe'
+cmd /c build.bat 2.1.0 all
+# 也可分别使用 standalone / onefile
 ```
 
-- 未签名 exe 仍可能触发 SmartScreen；正式分发建议代码签名，必要时向 Microsoft 提交 OneFile 误报。
+`build.bat` 默认版本为 2.1.0，先构建 StandAlone，再构建 OneFile。它自动把所选 Python 环境的 `Library/bin` 等目录加入 PATH，使用 MSVC、禁用 LTO，OneFile 不压缩。构建日志建议保存到被忽略的 `build_cache/logs/`。
 
-## 4. build.bat 当前行为
+## 产物与资源
 
-- 用法：
+- StandAlone：`CVAnalysis_StandAlone_v2.1.0/start_gui.dist/`，必须整体分发，不能只复制 EXE。
+- OneFile：`CVAnalysis_OneFile_v2.1.0/CVAnalysis_v2.1.0.exe`，启动时解压至系统临时目录的独立子目录。
+- 发布附件：StandAlone ZIP、OneFile EXE、`SHA256SUMS.txt`。GitHub 自动提供对应标签的源码 ZIP / tar.gz。
+- 两种模式均嵌入 `cvanalysis/resources/icons/cvanalysis.ico`，并包含主题模板、图标源文件与 PyGlass MIT 许可/改编声明。
+- EXE 未进行代码签名。分发与运行不要求修改系统防护设置。
 
-```bat
-build.bat                  :: 默认 2.0.2，构建 StandAlone + OneFile
-build.bat 2.0.2 all
-build.bat 2.0.2 standalone
-build.bat 2.0.2 onefile
-```
+## 本次验证结果
 
-- 优先使用 `nuitka_pack` 环境，可用 `CVANALYSIS_PYTHON` 覆盖 Python 路径。
-- 先构建 StandAlone，再构建 OneFile。
-- 自动把 conda 环境路径加入 PATH。
-- 设置 `CVANALYSIS_FORCE_DLL_CACHE=1` 时追加 `--force-dll-dependency-cache-update`。
-- OneFile 使用 `--onefile-no-compression` 和固定解压目录：
+- 开发环境（Python 3.13.9）完整回归：541 passed，132.58 s，退出码 0。
+- 打包环境（Python 3.11.14）完整回归：541 passed，178.51 s，退出码 0；测试隔离后两次完整运行均通过（另一次 204.19 s）。
+- 回归中发现 GUI 窗口只关闭未销毁导致状态跨测试残留；测试现使用会话级 QApplication、每项窗口销毁与 Qt 状态还原。打包环境先前两次原生访问冲突的日志保留在本地，隔离后完整通过。
+- StandAlone ZIP：1039 个构建文件逐字节校验，运行时 `config.json` / `themes.json` 未分发。
+- StandAlone：主窗口及预设下拉完成桌面观察；从 ZIP 解压的程序在隔离配置下离屏持续运行 15 秒，无启动错误，随后结束测试进程。
+- OneFile：隔离配置下冷启动，25 秒后加载器与子进程均存活，配置/主题已生成，无启动错误；随后结束本次测试进程。
 
-```text
-{TEMP}/CVAnalysis/onefile_{PID}_{TIME_US}_{RANDOM}
-```
+| 产物 | 字节数 | SHA256 |
+|---|---:|---|
+| StandAlone EXE | 129579008 | `428b9ae62d45c5f20ad31c08e2e1d7f24e206fb4ffa334e602d6f01ebda763af` |
+| StandAlone ZIP | 125498059 | `ef1bedd1946852bb7b47085107140459c1a5985c40174878cec47ea5de67d84f` |
+| OneFile EXE | 339504640 | `f80d562e64578809627792020bb7d56d8b6720e66f8168e486a22ceba16f9991` |
 
-- 构建后检查 exe 是否存在；StandAlone 额外检查 `ffi.dll`。
-- 写入公司、产品、文件版本和版权信息；失败返回非零退出码；不自动 `pause`。
+两种 EXE 的 Windows 文件版本为 `2.1.0.0`，均含与源 ICO 完全一致的 10 个图标尺寸。
 
-## 5. 常用命令
+## 验证
 
 ```powershell
-# 常规构建（缓存已热）
-cmd /c build.bat 2.0.2 standalone
-cmd /c build.bat 2.0.2 onefile
-cmd /c build.bat 2.0.2 all
-
-# 首次在 PATH / Nuitka / Python 变化后构建
-$env:CVANALYSIS_FORCE_DLL_CACHE = '1'
-cmd /c build.bat 2.0.2 all
-Remove-Item Env:CVANALYSIS_FORCE_DLL_CACHE
+.\tools\run_tests.ps1 -Durations 20
+# 在实际打包 Python 上也运行完整套件
+.\tools\run_tests.ps1 -Python "$env:USERPROFILE\.conda\envs\nuitka_pack\python.exe"
 ```
 
-建议把构建输出重定向到 `build_cache\logs\`，便于排查 Defender / DLL 问题：
+发布前检查：
 
-```powershell
-cmd /c build.bat 2.0.2 all *> "build_cache\logs\build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-```
+1. 所有版本字段一致：`cvanalysis/__init__.py`、`pyproject.toml`、`CITATION.cff`、`build.bat`。
+2. 完整回归退出码为零；定向测试不能代替完整回归。
+3. 验证 EXE Windows 版本资源、图标、SHA256；核对主题/许可和 Qt 平台插件。
+4. 在隔离配置目录启动两种程序，验证窗口创建、正常退出及启动日志；首次 OneFile 解压可能较慢。
+5. StandAlone ZIP 解压后路径和字节与构建目录一致。
+6. 真实 Windows 桌面的交互、不同缩放及打印/导出需人工验收，离屏测试不能证明这些体验。
 
-## 6. 验证清单
+## 常见构建问题
 
-1. exe 存在，版本资源为 `2.0.2.0`，记录大小和 SHA256。
-2. StandAlone 关键文件存在：
-   - `ffi.dll`
-   - `libexpat.dll`
-   - `_ctypes.pyd`
-   - `PySide6\qt-plugins\platforms\qwindows.dll`
-   - `matplotlib\mpl-data\matplotlibrc`
-3. 离屏启动 StandAlone：
+- 缺少 `ffi.dll` / `libexpat.dll`：确认 conda `Library/bin` 在 PATH 中。首次或环境变化后设置 `$env:CVANALYSIS_FORCE_DLL_CACHE='1'`，强制重建 DLL 依赖缓存。
+- DLL 扫描缓存记录旧环境：使用独立 `build_cache`，核对打包 Python，不要复制其他 Python 版本的 DLL。
+- 启动失败：诊断日志位于 `%LOCALAPPDATA%/CVAnalysis/logs/startup_error.log`，无可写目录时退回系统临时目录。不要仅凭 EXE 存在判断成功。
+- Nuitka 版本更新提示不等于构建失败；发布时记录实际编译器与依赖版本，避免构建中途升级环境。
+- 调试临时输出放 `.local/`；缓存和 EXE 不提交源码仓库。
 
-```powershell
-$env:QT_QPA_PLATFORM = 'offscreen'
-Start-Process -FilePath "CVAnalysis_StandAlone_v2.0.2\start_gui.dist\CVAnalysis_v2.0.2.exe" -PassThru
-# 等待 30 秒，确认进程未退出
-```
+## 发布顺序
 
-4. 对比 `%LOCALAPPDATA%\CVAnalysis\logs\startup_error.log` 运行前后的长度；最终产物不应新增崩溃记录。
-5. OneFile 启动后检查：
-   - `%TEMP%\CVAnalysis\onefile_*` 已解压。
-   - 进程保持运行。
-   - Defender 没有新增误杀记录。
-6. 手工验证：打开用户项目副本、绘图、EIS 拟合、CP 分析、CSV/图片导出。
-7. 源码回归：
-
-```powershell
-$env:QT_QPA_PLATFORM = 'offscreen'
-python -m pytest tests_v2 -q
-```
-
-## 7. 已知问题 / 注意事项
-
-- 完整 pytest 在当前环境会在打印 `248 passed` 后以 `-1073741819` 退出（测试进程 teardown 访问冲突）；单独的应用启动/退出测试退出码为 0，不阻塞打包。
-- Nuitka anti-bloat 会提示未包含 `PIL.ImageTk`、pandas numba、pandas plotting；应用直接使用 matplotlib，当前构建已验证绘图可用。
-- 应用首次运行会在 exe 同目录创建 `config.json`；这是用户配置，不要提交。
-- 旧 `startup_error.log` 中可能保留修复前中间构建的 `ImportError` 记录；以最终产物的新增日志为准。
-- OneFile 约 336 MB，StandAlone exe 约 126 MB；体积和未签名 exe 的误报风险需要在发布时确认。
-- 如果在没有 Anaconda 的干净机器上分发，使用 StandAlone 文件夹形式；OneFile 解压目录已包含所需 DLL。
-
-## 8. Git / GitHub 同步注意
-
-- `.gitignore` 已排除：
-  - `build_cache/`、`CVAnalysis_OneFile_v*/`、`CVAnalysis_StandAlone_v*/`、`*.build/`、`*.dist/`、`*.onefile-build/`
-  - `config.json`、`testdata/`、`*.cvproj`、根目录测量数据/图片
-  - `.pytest_cache/`、`.test_tmp/`、`__pycache__/`、`.vscode/`、`temp/`、日志、缓存、虚拟环境
-  - 本地交接文件 `README_LOCAL.md`、`Vibe_Coding_Outline.md`、`docs/IMPLEMENTATION_LOG.md`
-- `README_LOCAL.md` 保存本机环境、构建记录和交接说明，已忽略，不随 GitHub 同步。
-- `tests_v2/fixtures/test_EIS.txt` 已改为合成 EIS 数据，避免包含本机测量路径；不要换回真实数据文件头。
-- 不要提交构建输出、`config.json`、`testdata/`、用户 `.cvproj` 或导出图片。
-- 不要执行 `git clean` / `git reset --hard`；用户数据就在工作区。
-- `config.json` 已在 Git 索引中标记删除并加入 `.gitignore`；提交时确认它不再被跟踪。
-- 远端为 `origin https://github.com/ShenKira/CHI-CVAnalysis.git`。v1 已冻结；推荐保留 v1 tags，并用 `v1-archive` 分支 + `v2` 分支同步。
-- 当前发布线：`main` 与 `v2` 同步，补丁版本使用轻量/附注 tag（如 `v2.0.2`）。
-- 推荐补丁发布流程（**不 force-push**）：确认 `git status` → 提交代码和文档 → 推送 `main`、`v2` → 创建并推送 `v2.0.2` tag。
-- 本仓库 v1 与 v2 在历史上是两段 unrelated history；不要用普通 merge 重新引入 v1，保留 `v1-archive` 分支和已有 tags。
-- 示例流程（确认 diff 后执行）：
-
-```powershell
-git add -A
-git status --short
-git diff --cached --name-only
-git commit -m "CVAnalysis v2.0.2: GUI themes, legend aliases and per-cycle results"
-git push origin main v2
-git tag -a v2.0.2 -m "CVAnalysis v2.0.2"
-git push origin v2.0.2
-```
-
-- 如果 `main` 有 branch protection，先推送 `v2` 分支，再从 `v2` 向 `main` 开 PR；不要 force-push。
-- 组员更新：无本地修改时 `git pull --ff-only`；有本地修改先备份/提交，或重新 clone。
-- `update_detailed.md` 是本地 release notes 草稿，已忽略；复制到 GitHub Release。
-- 如果私有数据曾经进入历史提交，仅从当前树删除不会清除历史；这种情况需要单独的历史清理（如 `git filter-repo`），执行前先确认。
-
-## 9. 下一步
-
-1. 在构建机加入 Defender 排除项，减少 clcache 锁定和 OneFile 误杀。
-2. 完成 StandAlone / OneFile 的人工功能验收（导入、绘图、EIS、CP、导出）。
-3. 正式分发前考虑代码签名。
-4. 每次重新构建后更新产物大小、SHA256 和验证记录。
+先检查差异、隐私文件与完整回归，再构建和验证。提交源码后重新读取远端，确认 `main` / `v2` 可快进，使用普通推送，禁止强推。创建不可变的附注标签 `v2.1.0`，上传附件并核对 Release 下载链接及 SHA256。后续文档或测试维护使用新提交，不移动已发布标签。

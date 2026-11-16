@@ -10,16 +10,20 @@ from PySide6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from cvanalysis.plotting.style import PlotStyle, canvas_size_for_ratio
-from cvanalysis.ui.theme import apply_theme_role
+from cvanalysis.ui.layout import fit_dialog
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role
 
 
 ASPECT_RATIOS = {
@@ -40,23 +44,42 @@ class QuickStyleDialog(QDialog):
     apply_requested = Signal(dict)
     save_requested = Signal(dict)
 
-    def __init__(self, style: PlotStyle, preset_name: str, parent=None):
+    def __init__(
+        self,
+        style: PlotStyle,
+        preset_name: str,
+        parent=None,
+        *,
+        base_style: PlotStyle | None = None,
+    ):
         super().__init__(parent)
         self.style = style
-        self.setWindowTitle(f"快速绘图参数 — {preset_name}")
-        self.resize(520, 680)
+        self.base_style = base_style or style
+        self.setWindowTitle(f"当前图微调 — {preset_name}")
         self._syncing = False
         self._build_ui()
         self._load_style(style)
+        fit_dialog(self, 540, 700, min_width=440, min_height=480)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.setContentsMargins(2, 2, 2, 2)
+        body.setSpacing(10)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
         hint = QLabel(
             "“应用”只修改当前图；“保存到配置”会先应用，再询问覆盖当前预设或另存为新预设。"
         )
         hint.setWordWrap(True)
         apply_theme_role(hint, "muted")
-        layout.addWidget(hint)
+        body.addWidget(hint)
 
         ratio_group = QGroupBox("版式与比例")
         ratio_form = QFormLayout(ratio_group)
@@ -69,7 +92,7 @@ class QuickStyleDialog(QDialog):
         self.sync_export_cb = QCheckBox("同步导出画布比例（统一高度，按比例计算宽度）")
         self.sync_export_cb.setChecked(False)
         ratio_form.addRow(self.sync_export_cb)
-        layout.addWidget(ratio_group)
+        body.addWidget(ratio_group)
 
         font_group = QGroupBox("字体")
         font_form = QFormLayout(font_group)
@@ -108,7 +131,7 @@ class QuickStyleDialog(QDialog):
         unify_btn.setProperty("secondary", True)
         unify_btn.clicked.connect(self._unify_font_sizes)
         font_form.addRow(unify_btn)
-        layout.addWidget(font_group)
+        body.addWidget(font_group)
 
         line_group = QGroupBox("线条与显示")
         line_form = QFormLayout(line_group)
@@ -138,22 +161,25 @@ class QuickStyleDialog(QDialog):
         self.spines_cb.stateChanged.connect(self._update_tick_enabled)
         self.legend_frame_cb = QCheckBox("图例边框")
         line_form.addRow(self.legend_frame_cb)
-        layout.addWidget(line_group)
+        body.addWidget(line_group)
+        body.addStretch(1)
 
         buttons = QHBoxLayout()
         reset_btn = QPushButton("还原当前预设")
-        reset_btn.setProperty("secondary", True)
+        apply_button_role(reset_btn, "secondary")
         reset_btn.clicked.connect(self._reset_to_base)
         buttons.addWidget(reset_btn)
         buttons.addStretch()
         apply_btn = QPushButton("应用（当前图）")
+        apply_button_role(apply_btn, "primary", pill=True)
         apply_btn.clicked.connect(lambda: self.apply_requested.emit(self.overrides()))
         buttons.addWidget(apply_btn)
         save_btn = QPushButton("保存到配置...")
+        apply_button_role(save_btn, "secondary")
         save_btn.clicked.connect(lambda: self.save_requested.emit(self.overrides()))
         buttons.addWidget(save_btn)
         close_btn = QPushButton("关闭")
-        close_btn.setProperty("secondary", True)
+        apply_button_role(close_btn, "secondary")
         close_btn.clicked.connect(self.reject)
         buttons.addWidget(close_btn)
         layout.addLayout(buttons)
@@ -175,6 +201,7 @@ class QuickStyleDialog(QDialog):
         self._syncing = True
         try:
             self.font_family_edit.setText(", ".join(style.font_family))
+            self.font_family_edit.setCursorPosition(0)
             self.aspect_combo.setCurrentIndex(max(0, self.aspect_combo.findData(style.axes_aspect)))
             self.sync_export_cb.setChecked(False)
             same_xy = (
@@ -249,7 +276,7 @@ class QuickStyleDialog(QDialog):
             self._syncing = False
 
     def _reset_to_base(self) -> None:
-        self._load_style(self.style)
+        self._load_style(self.base_style)
 
     def overrides(self) -> dict:
         families = tuple(
@@ -263,7 +290,7 @@ class QuickStyleDialog(QDialog):
         y_bold = x_bold if self.sync_xy_cb.isChecked() else self.ylabel_bold_cb.isChecked()
         aspect = self.aspect_combo.currentData() or "auto"
         overrides = {
-            "font_family": families or self.style.font_family,
+            "font_family": families or self.base_style.font_family,
             "xlabel_size": x_size,
             "ylabel_size": y_size,
             "xlabel_bold": x_bold,

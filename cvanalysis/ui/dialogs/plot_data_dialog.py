@@ -27,11 +27,15 @@ from cvanalysis.plotting.legend import (
     render_legend_template,
     resolve_legend_labels,
     template_uses_cycle,
+    validate_legend_template,
 )
+from cvanalysis.plotting.template_format import TemplateError
 from cvanalysis.plotting.spec import PlotSpec
-from cvanalysis.ui.theme import apply_theme_role, theme_color
+from cvanalysis.ui.layout import fit_dialog
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role, theme_color
 from cvanalysis.ui.dialogs.legend_dialog import build_token_combo, insert_token
 from cvanalysis.ui.widgets.view_columns import ViewColumns
+from cvanalysis.ui.widgets.formatted_text_preview import FormattedTextPreview
 
 
 class PlotDataDialog(QDialog):
@@ -50,14 +54,13 @@ class PlotDataDialog(QDialog):
         self.dataset = dataset
         self.spec = spec
         self._text_values = text_values
-        self.kind = (
-            "cv" if kind.startswith("cv_") else "cp" if kind.startswith("cp_") else "eis"
-        )
+        self.kind = ("cv" if kind.startswith("cv_") else "cp" if kind.startswith("cp_")
+                     else "lsv" if kind.startswith("lsv_") else "it" if kind.startswith("it_") else "eis")
         self._updating = False
         self._run_items: dict[str, QTreeWidgetItem] = {}
         self._template_edits: dict[str, QLineEdit] = {}
         self.setWindowTitle("选择本图绘制数据与图例")
-        self.resize(920, 600)
+        fit_dialog(self, 920, 620, min_width=620, min_height=420)
         self._build_ui()
         self._refresh_previews()
 
@@ -66,10 +69,10 @@ class PlotDataDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        info = QLabel(
-            "勾选本图要绘制的数据。CV 数据可展开选择 Cycle；"
-            "“本图模板”留空表示继承数据默认模板。"
-        )
+        blank_hint = "，输入 { } 不显示该数据的图例"
+        info = QLabel("勾选本图要绘制的数据。CV 数据可展开选择 Cycle；"
+                      "“本图模板”留空表示继承数据默认模板" + blank_hint + "。"
+                      "数值可使用 {CV_Voltage:.2f} 等格式，末尾零会保留。")
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -110,10 +113,10 @@ class PlotDataDialog(QDialog):
         self.token_combo = build_token_combo(self, self.kind)
         self.token_combo.currentIndexChanged.connect(self._insert_token)
         apply_btn = QPushButton("应用到勾选数据")
-        apply_btn.setProperty("secondary", True)
+        apply_button_role(apply_btn, "secondary")
         apply_btn.clicked.connect(self._apply_batch_template)
         inherit_btn = QPushButton("继承数据默认")
-        inherit_btn.setProperty("secondary", True)
+        apply_button_role(inherit_btn, "secondary")
         inherit_btn.clicked.connect(self._inherit_defaults)
         batch_row.addWidget(self.batch_edit, 1)
         batch_row.addWidget(self.token_combo)
@@ -121,10 +124,17 @@ class PlotDataDialog(QDialog):
         batch_row.addWidget(inherit_btn)
         batch_layout.addLayout(batch_row)
         layout.addWidget(batch_group)
+        self.rendered_preview = FormattedTextPreview()
+        self.rendered_preview.setToolTip("所选数据的图例渲染示例")
+        layout.addWidget(self.rendered_preview)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("确定")
-        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        ok_button = buttons.button(QDialogButtonBox.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        ok_button.setText("确定")
+        cancel_button.setText("取消")
+        ok_button.setDefault(True)
+        apply_button_role(ok_button, "primary", pill=True)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -137,6 +147,8 @@ class PlotDataDialog(QDialog):
             return "例如 {CV_Voltage}-{Cycle_Number}"
         if self.kind == "cp":
             return "例如 {File_Name}-{Current}"
+        if self.kind in {"lsv", "it"}:
+            return "例如 {File_Name}"
         return "例如 {File_Name}-{Low_Freq}"
 
     def _runs(self) -> list[CVRun | EISRun | CPRun]:
@@ -144,6 +156,8 @@ class PlotDataDialog(QDialog):
             return list(self.dataset.cv_runs)
         if self.kind == "cp":
             return list(self.dataset.cp_runs)
+        if self.kind in {"lsv", "it"}:
+            return list(self.dataset.lsv_runs if self.kind == "lsv" else self.dataset.it_runs)
         return list(self.dataset.eis_runs)
 
     def _populate_runs(self) -> None:
@@ -188,9 +202,13 @@ class PlotDataDialog(QDialog):
                         if not cycle.valid:
                             child.setForeground(0, QColor(theme_color("error")))
                             child.setToolTip(0, cycle.outlier_reason or cycle.warning or "无效循环")
-                        checked = chosen is None or cycle.index in chosen
+                        checked = (
+                            run.run_id in selected
+                            and (chosen is None or cycle.index in chosen)
+                        )
                         child.setCheckState(0, Qt.Checked if checked else Qt.Unchecked)
                         item.addChild(child)
+                    item.setCheckState(0, self._parent_check_state(item))
         finally:
             self._updating = False
         self._refresh_selection_label()
@@ -214,9 +232,11 @@ class PlotDataDialog(QDialog):
                 )
             else:
                 lines.append(f"{len(run.freq)} 点")
+        elif hasattr(run, "kind") and run.kind in {"lsv", "it"}:
+            lines.append(f"{run.kind.upper()} · {len(run.x)} 点")
         else:
-            hold = "含保持段记录" if run.has_hold_data else "无保持段记录"
-            lines.append(f"CP · {run.voltage_window or 0:.3g} V 窗口 · {hold}")
+            hold = run.hold_description()
+            lines.append(f"CP · {run.voltage_window or 0:.3g} V 窗口" + (f" · {hold}" if hold else ""))
         if run.legend_template:
             lines.append(f"数据默认图例: {run.legend_template}")
         return "\n".join(lines)
@@ -234,15 +254,13 @@ class PlotDataDialog(QDialog):
         try:
             if item.parent() is None:
                 state = item.checkState(0)
+                if state == Qt.PartiallyChecked:
+                    state = Qt.Checked
                 for index in range(item.childCount()):
                     item.child(index).setCheckState(0, state)
             else:
                 parent = item.parent()
-                checked = any(
-                    parent.child(index).checkState(0) == Qt.Checked
-                    for index in range(parent.childCount())
-                )
-                parent.setCheckState(0, Qt.Checked if checked else Qt.Unchecked)
+                parent.setCheckState(0, self._parent_check_state(parent))
         finally:
             self._updating = False
         self._refresh_selection_label()
@@ -272,11 +290,23 @@ class PlotDataDialog(QDialog):
         self._refresh_selection_label()
         self._refresh_previews()
 
+    @staticmethod
+    def _parent_check_state(item: QTreeWidgetItem):
+        states = [
+            item.child(index).checkState(0)
+            for index in range(item.childCount())
+        ]
+        if states and all(state == Qt.Checked for state in states):
+            return Qt.Checked
+        if any(state in (Qt.Checked, Qt.PartiallyChecked) for state in states):
+            return Qt.PartiallyChecked
+        return Qt.Unchecked
+
     def _checked_run_ids(self) -> list[str]:
         result = []
         for run in self._runs():
             item = self._run_items.get(run.run_id)
-            if item is not None and item.checkState(0) == Qt.Checked:
+            if item is not None and item.checkState(0) != Qt.Unchecked:
                 result.append(run.run_id)
         return result
 
@@ -306,6 +336,7 @@ class PlotDataDialog(QDialog):
 
     def _refresh_previews(self) -> None:
         self._updating = True
+        first_preview = None
         checked_count = len(self._checked_run_ids())
         file_numbers = dataset_file_numbers(self.dataset)
         resolved_labels = resolve_legend_labels(
@@ -370,6 +401,10 @@ class PlotDataDialog(QDialog):
                         file_number=file_numbers.get(run.run_id),
                         fallback=fallback,
                     )
+                if template and not label and not unknown:
+                    label = "（不显示图例）"
+                if first_preview is None and item.checkState(0) != Qt.Unchecked:
+                    first_preview = label
                 if unknown:
                     label += "  （未知字段: " + "、".join("{" + token + "}" for token in unknown) + "）"
                     item.setForeground(2, QColor(theme_color("error")))
@@ -414,6 +449,7 @@ class PlotDataDialog(QDialog):
                     )
         finally:
             self._updating = False
+        self.rendered_preview.show_preview(first_preview or "")
 
     def selected_run_ids(self) -> list[str]:
         return self._checked_run_ids()
@@ -424,7 +460,7 @@ class PlotDataDialog(QDialog):
         result: dict[str, list[int]] = {}
         for run in self.dataset.cv_runs:
             item = self._run_items.get(run.run_id)
-            if item is None or item.checkState(0) != Qt.Checked or not item.childCount():
+            if item is None or item.checkState(0) == Qt.Unchecked or not item.childCount():
                 continue
             selected = self._selected_cycle_indices(run, item)
             if len(selected) != len(run.cycles):
@@ -443,6 +479,12 @@ class PlotDataDialog(QDialog):
         if not self.selected_run_ids():
             QMessageBox.information(self, "没有选择数据", "请至少勾选一个要绘制的数据")
             return
+        for run_id in self._checked_run_ids():
+            try:
+                validate_legend_template(self._template_edits[run_id].text().strip())
+            except TemplateError as exc:
+                QMessageBox.warning(self, "模板格式无效", str(exc))
+                return
         unknown = self._unknown_tokens()
         if unknown:
             answer = QMessageBox.question(
@@ -461,7 +503,7 @@ class PlotDataDialog(QDialog):
         for run in self._runs():
             item = self._run_items.get(run.run_id)
             editor = self._template_edits.get(run.run_id)
-            if item is None or editor is None or item.checkState(0) != Qt.Checked:
+            if item is None or editor is None or item.checkState(0) == Qt.Unchecked:
                 continue
             template = editor.text().strip()
             if not template:

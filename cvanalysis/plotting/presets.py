@@ -197,7 +197,8 @@ def preset_names(user_presets: dict[str, dict] | None = None) -> list[str]:
 
 def preset_label(name: str, user_presets: dict[str, dict] | None = None) -> str:
     if user_presets and name in user_presets:
-        return user_presets[name].get("label", name)
+        label = user_presets[name].get("label", name)
+        return str(label) if label else name
     if name in BUILTIN_PRESETS:
         return BUILTIN_PRESETS[name].label
     return name

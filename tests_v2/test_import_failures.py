@@ -92,6 +92,12 @@ def test_frequency_errors_are_visible_and_not_unrestricted():
         panel.freq_low_edit.setText(text)
         assert not panel.validate_frequency()
         assert panel.frequency_error.text()
+    panel.freq_low_edit.setText("abc")
+    panel.show_legend_cb.setChecked(False)
+    options = panel.options()
+    assert options["frequency_low"] is None
+    assert options["frequency_high"] is None
+    assert options["show_legend"] is False
     panel.freq_low_edit.setText("10")
     panel.freq_high_edit.setText("1")
     assert not panel.validate_frequency()

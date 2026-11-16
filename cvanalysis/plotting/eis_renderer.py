@@ -16,7 +16,6 @@ from cvanalysis.domain.units import (
     CAPACITANCE,
     IMPEDANCE,
     IMPEDANCE_AREA,
-    format_with_unit,
     normalize_impedance,
     resolve_unit,
     unit_factor,
@@ -32,7 +31,8 @@ from cvanalysis.plotting.legend import (
 )
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
-from cvanalysis.plotting.texts import axis_text, plot_text
+from cvanalysis.plotting.texts import axis_text, plot_text, safe_format
+from cvanalysis.plotting.template_format import DisplayValue
 
 
 _CJK_FONT_CACHE: list[str] | None = None
@@ -184,13 +184,16 @@ def _format_metric_with_unit(
     override: str | None,
     *,
     digits: int = 3,
-) -> str:
+) -> DisplayValue:
     factor = unit_factor(family, override)
     if value is None or not np.isfinite(value):
-        return "—"
+        return DisplayValue(None, "—")
     if factor is None:
-        return format_with_unit(value, family, digits=digits)
-    return f"{value * factor:.{digits}g} {override}"
+        unit, factor = resolve_unit(family, [value])
+    else:
+        unit = override
+    number = float(value * factor)
+    return DisplayValue(number, f"{number:.{digits}g} {unit}", f" {unit}")
 
 
 def _impedance_metric(
@@ -247,7 +250,7 @@ def _format_metrics(
                 plot_text(
                     spec,
                     "annotation.eis.ceff",
-                    value=format_with_unit(c_eff, CAPACITANCE, digits=3),
+                    value=_format_metric_with_unit(c_eff, CAPACITANCE, None),
                 )
             )
         lines.append(plot_text(spec, "annotation.eis.r2", value=fit.r2))
@@ -275,7 +278,7 @@ def _format_metrics(
                 plot_text(
                     spec,
                     "annotation.eis.cdl_approx",
-                    value=format_with_unit(metrics.cdl_F, CAPACITANCE, digits=3),
+                    value=_format_metric_with_unit(metrics.cdl_F, CAPACITANCE, None),
                 )
             )
         if metrics.f_peak_hz:
@@ -389,7 +392,7 @@ def draw_nyquist(
             y_series.append(y_fit)
             ax.plot(x_fit, y_fit, "--", color=color,
                     linewidth=max(1.0, style.line_width), alpha=0.9,
-                    label=plot_text(spec, "legend.eis_fit_suffix", label=label))
+                    label=plot_text(spec, "legend.eis_fit_suffix", label=label) if label else "_nolegend_")
         if style.annotation and spec.annotations and len(runs) == 1:
             text = _format_metrics(
                 run,
@@ -408,13 +411,13 @@ def draw_nyquist(
         axis_text(spec, "main", "y", unit=unit),
     )
     set_axis_display_units(ax, x=(unit, factor), y=(unit, factor))
-    title = spec.title or plot_text(spec, "title.eis_nyquist")
+    title = safe_format(spec.title, {}) or plot_text(spec, "title.eis_nyquist")
     if title and style.show_title:
         ax.set_title(title, fontsize=style.title_size, fontfamily=style.text_font_family(),
                      fontweight="bold" if style.title_bold else "normal")
     if style.nyquist_equal_aspect and _equal_aspect_reasonable(x_series, y_series):
         ax.set_aspect("equal", adjustable="datalim")
-    if style.legend and spec.show_legend:
+    if style.legend and spec.show_legend and ax.get_legend_handles_labels()[0]:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size,
                            frameon=style.legend_frame, shadow=style.legend_shadow,
                            ncol=style.legend_columns)
@@ -498,11 +501,11 @@ def draw_bode(
     )
     set_axis_display_units(ax_phase, x=("Hz", 1.0), y=("°", 1.0))
     set_axis_display_units(ax_mag, x=("Hz", 1.0), y=(unit, factor))
-    title = spec.title or plot_text(spec, "title.eis_bode")
+    title = safe_format(spec.title, {}) or plot_text(spec, "title.eis_bode")
     if title and style.show_title:
         ax_phase.set_title(title, fontsize=style.title_size, fontfamily=style.text_font_family(),
                            fontweight="bold" if style.title_bold else "normal")
-    if style.legend and spec.show_legend:
+    if style.legend and spec.show_legend and ax_phase.get_legend_handles_labels()[0]:
         legend = ax_phase.legend(loc=style.legend_location, fontsize=style.legend_size,
                                  frameon=style.legend_frame, shadow=style.legend_shadow,
                                  ncol=style.legend_columns)
@@ -576,10 +579,12 @@ def draw_fit(
         x_series.append(x_fit)
         y_series.append(y_fit)
         ax.plot(x_fit, y_fit, "-", color=color, linewidth=style.line_width,
-                label=plot_text(spec, "legend.eis_fit_suffix", label=label))
-        ax_res.semilogx(fit.frequencies, fit.residual_real * factor, "o", color=color,
+                label=plot_text(spec, "legend.eis_fit_suffix", label=label) if label else "_nolegend_")
+        residual_real = normalize_impedance(fit.residual_real, normalization, area_cm2=run.params.area_cm2)
+        residual_imag = normalize_impedance(fit.residual_imag, normalization, area_cm2=run.params.area_cm2)
+        ax_res.semilogx(fit.frequencies, residual_real * factor, "o", color=color,
                         markersize=max(2, style.marker_size - 2), label=plot_text(spec, "legend.real_residual"))
-        ax_res.semilogx(fit.frequencies, fit.residual_imag * factor, "x", color=color,
+        ax_res.semilogx(fit.frequencies, residual_imag * factor, "x", color=color,
                         markersize=max(2, style.marker_size - 1), label=plot_text(spec, "legend.imag_residual"))
         if style.annotation and spec.annotations and len(available) == 1:
             _annotate(
@@ -608,14 +613,14 @@ def draw_fit(
     )
     set_axis_display_units(ax, x=(unit, factor), y=(unit, factor))
     set_axis_display_units(ax_res, x=("Hz", 1.0), y=(unit, factor))
-    title = spec.title or plot_text(spec, "title.eis_fit")
+    title = safe_format(spec.title, {}) or plot_text(spec, "title.eis_fit")
     if title and style.show_title:
         ax.set_title(title, fontsize=style.title_size, fontfamily=style.text_font_family(),
                      fontweight="bold" if style.title_bold else "normal")
     ax_res.axhline(0.0, color="#666666", linewidth=0.8)
     if style.nyquist_equal_aspect and _equal_aspect_reasonable(x_series, y_series):
         ax.set_aspect("equal", adjustable="datalim")
-    if style.legend and spec.show_legend:
+    if style.legend and spec.show_legend and ax.get_legend_handles_labels()[0]:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size,
                            frameon=style.legend_frame, shadow=style.legend_shadow,
                            ncol=style.legend_columns)

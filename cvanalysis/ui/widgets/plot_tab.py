@@ -6,11 +6,12 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QMimeData, Qt, Signal
-from PySide6.QtGui import QGuiApplication, QImage
+from PySide6.QtCore import QByteArray, QMimeData, QSize, Qt, Signal
+from PySide6.QtGui import QActionGroup, QGuiApplication, QImage
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -19,10 +20,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
-from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
@@ -38,8 +39,14 @@ from cvanalysis.plotting.export import (
 from cvanalysis.plotting.presets import preset_label, preset_names
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, canvas_size_for_ratio
-from cvanalysis.ui.theme import apply_theme_role, theme_color
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role, theme_color
+from cvanalysis.ui.glass.surfaces import MaterialManager
+from cvanalysis.ui.glass.plot_toolbar import CompactNavigationToolbar, FloatingPlotToolbar
+from cvanalysis.ui.glass.popups import wrap_menu
+from shiboken6 import isValid
 from cvanalysis.plotting.paper import paper_overrides
+from cvanalysis.plotting.axis_limits import axis_display_units, axis_display_dimensions
+from cvanalysis.plotting.it_references import references_from_options, store_references
 
 
 class AutoResizeCanvas(FigureCanvasQTAgg):
@@ -109,8 +116,6 @@ class PlotTab(QWidget):
     plot_changed = Signal(object)
     preset_changed = Signal(object, str)
     data_requested = Signal(object)
-    follow_changed = Signal(object, bool)
-    options_requested = Signal(object)
 
     def __init__(
         self,
@@ -123,6 +128,7 @@ class PlotTab(QWidget):
         color_config: dict | None = None,
         user_presets: dict | None = None,
         text_values: dict | None = None,
+        glass_manager=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -139,6 +145,7 @@ class PlotTab(QWidget):
         self.warnings: list[str] = []
         self.dirty = False
         self._fit_to_view = True
+        self.glass_manager = glass_manager or MaterialManager(self)
         self._build_ui()
         self.redraw()
 
@@ -147,77 +154,57 @@ class PlotTab(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
-        header = QHBoxLayout()
-        self.title_label = QLabel(self.spec.title or self.spec.label)
-        apply_theme_role(self.title_label, "title")
-        header.addWidget(self.title_label)
-        header.addStretch()
-        options_btn = QPushButton("分析 / 论文选项")
-        options_btn.setProperty("secondary", True)
-        options_btn.clicked.connect(lambda: self.options_requested.emit(self))
-        header.addWidget(options_btn)
-
-        self.follow_cb = QCheckBox("跟随勾选")
-        self.follow_cb.setToolTip(
-            "跟随左侧数据集勾选即时更新本图；用“数据...”自定义数据后会自动取消"
-        )
-        self.follow_cb.setChecked(self.spec.follow_dataset)
-        self.follow_cb.toggled.connect(self._on_follow_toggled)
-        header.addWidget(self.follow_cb)
-
-        self.data_btn = QPushButton("数据...")
-        self.data_btn.setProperty("secondary", True)
-        self.data_btn.clicked.connect(lambda: self.data_requested.emit(self))
-        header.addWidget(self.data_btn)
-        self._refresh_data_button()
-
-        header.addWidget(QLabel("预设:"))
-        self.preset_combo = QComboBox()
-        for name in preset_names(self.user_presets):
-            self.preset_combo.addItem(preset_label(name, self.user_presets), name)
-        index = self.preset_combo.findData(self.spec.preset)
-        if index >= 0:
-            self.preset_combo.setCurrentIndex(index)
-        self.preset_combo.currentIndexChanged.connect(self._on_preset_combo)
-        header.addWidget(self.preset_combo)
-
-        export_btn = QPushButton("导出")
-        export_btn.setProperty("secondary", True)
-        export_btn.clicked.connect(self.export_plot)
-        header.addWidget(export_btn)
-
-        copy_btn = QPushButton("复制")
-        copy_btn.setProperty("secondary", True)
-        copy_btn.clicked.connect(self.copy_plot)
-        header.addWidget(copy_btn)
-        layout.addLayout(header)
-
         self.figure = Figure(figsize=self.style.figure_size, dpi=self.style.dpi)
         self.canvas = AutoResizeCanvas(self.figure)
+        self.canvas.setFocusPolicy(Qt.StrongFocus)
         self.canvas.setContextMenuPolicy(Qt.CustomContextMenu)
         self.canvas.customContextMenuRequested.connect(self._show_context_menu)
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        layout.addWidget(self.toolbar)
+        self.canvas.mpl_connect("button_press_event", self._reference_double_click)
         self.canvas_host = CanvasHost(self, self.canvas)
+        self.canvas_host.setProperty("themeRole", "canvas-host")
         layout.addWidget(self.canvas_host, stretch=1)
+        self.toolbar = CompactNavigationToolbar(self.canvas, self.canvas_host)
+        self.toolbar.setMaximumHeight(36)
+        self.liquid_toolbar = FloatingPlotToolbar(self, self.glass_manager)
 
         self.warning_label = QLabel("")
         apply_theme_role(self.warning_label, "error")
         self.warning_label.setWordWrap(True)
         layout.addWidget(self.warning_label)
 
-    def _on_preset_combo(self, index: int) -> None:
-        name = self.preset_combo.itemData(index)
-        if name and name != self.spec.preset:
-            self.preset_changed.emit(self, name)
-
     def _show_context_menu(self, position) -> None:
-        self._build_context_menu().exec(self.canvas.mapToGlobal(position))
+        if not self.canvas.rect().contains(position):
+            position = self.canvas.rect().center()
+        menu = self._build_context_menu()
+        try:
+            menu.exec(self.canvas.mapToGlobal(position))
+        finally:
+            if isValid(menu):
+                menu.deleteLater()
 
-    def _build_context_menu(self) -> QMenu:
+    def _build_settings_menu(self) -> QMenu:
+        """Single discoverable entry point for per-plot settings and export."""
         menu = QMenu(self)
-        settings_action = menu.addAction("当前图设置...")
-        settings_action.triggered.connect(self._open_inspector)
+        data_action = menu.addAction("本图数据与图例...")
+        data_action.triggered.connect(lambda: self.data_requested.emit(self))
+        if self.spec.kind == "it_curve":
+            references_action = menu.addAction("参考线与图例...")
+            references_action.triggered.connect(lambda: self.open_it_reference_manager())
+        style_action = menu.addAction("当前图设置...")
+        style_action.triggered.connect(self._open_inspector)
+        presets = menu.addMenu("绘图预设")
+        group = QActionGroup(presets)
+        group.setExclusive(True)
+        # Keep Python ownership alive as well as the Qt parent chain on PySide.
+        menu._preset_menu = presets
+        menu._preset_group = group
+        for name in preset_names(self.user_presets):
+            action = presets.addAction(preset_label(name, self.user_presets))
+            action.setCheckable(True)
+            action.setChecked(name == self.spec.preset)
+            action.triggered.connect(lambda checked=False, value=name: self.preset_changed.emit(self, value))
+            group.addAction(action)
+        menu.addSeparator()
 
         ratio_menu = QMenu("图片比例", menu)
         menu.addMenu(ratio_menu)
@@ -235,19 +222,26 @@ class PlotTab(QWidget):
             )
 
         fit_action = menu.addAction("按比例适应标签页")
+        self._settings_fit_action = fit_action
         fit_action.setCheckable(True)
         fit_action.setChecked(self._fit_to_view)
         fit_action.toggled.connect(self.set_fit_to_view)
         menu.addSeparator()
-        reset_action = menu.addAction("恢复当前图默认样式")
-        reset_action.triggered.connect(self.reset_style)
-        copy_action = menu.addAction("复制图像")
-        copy_action.triggered.connect(self.copy_plot)
-        copy_vector_action = menu.addAction("复制当前矢量图")
-        copy_vector_action.triggered.connect(self.copy_vector_plot)
-        export_action = menu.addAction("导出当前图...")
-        export_action.triggered.connect(self.export_plot)
+        menu.addAction("复制当前图像", self.copy_plot)
+        menu.addAction("复制当前矢量图", self.copy_vector_plot)
+        menu.addAction("导出当前图...", self.export_plot)
+        menu.addAction("恢复当前图默认样式", self.reset_style)
+        # Keep Python wrappers for submenu actions alive for the popup's full
+        # lifetime; some PySide versions otherwise delete a submenu when its
+        # transient QAction wrapper is collected.
+        menu._action_refs = list(menu.actions())
+        presets._action_refs = list(presets.actions())
+        ratio_menu._action_refs = list(ratio_menu.actions())
         return menu
+
+    def _build_context_menu(self) -> QMenu:
+        source = self._build_settings_menu()
+        return wrap_menu(source, self.canvas, self.glass_manager)
 
     def _open_inspector(self) -> None:
         from cvanalysis.ui.dialogs.plot_inspector_dialog import PlotInspectorDialog
@@ -255,6 +249,49 @@ class PlotTab(QWidget):
         dialog = PlotInspectorDialog(self, self)
         dialog.changed.connect(lambda: self.plot_changed.emit(self))
         dialog.exec()
+
+    def _reference_double_click(self, event) -> None:
+        if (self.spec.kind != "it_curve" or not event.dblclick or event.button != 1
+                or event.inaxes is None or self.toolbar.mode):
+            return
+        ax = event.inaxes
+        for artist in reversed(ax.texts):
+            ref_id = getattr(artist, "_it_reference_id", None)
+            if ref_id and artist.get_visible() and artist.contains(event)[0]:
+                self.open_it_reference_manager(selected_id=ref_id)
+                return
+        candidates = []
+        for line in ax.lines:
+            ref_id = getattr(line, "_it_reference_id", None)
+            if ref_id and line.get_visible() and line.contains(event)[0]:
+                y = ax.transData.transform((0, line.get_ydata()[0]))[1]
+                candidates.append((abs(y - event.y), ref_id))
+        if candidates:
+            self.open_it_reference_manager(selected_id=min(candidates)[1])
+
+    def open_it_reference_manager(self, *, add=False, selected_id=None):
+        if self.spec.kind != "it_curve":
+            return
+        from cvanalysis.ui.dialogs.it_reference_dialog import ItReferenceManagerDialog, ItReferenceSettingsDialog
+        axis = self.figure.axes[0] if self.figure.axes else None
+        unit = axis_display_units(axis).get("y") if axis is not None else None
+        dimension = axis_display_dimensions(axis).get("y") if axis is not None else None
+        unit_info = ({"label": unit[0], "factor": unit[1], "dimension": dimension}
+                     if unit and dimension else None)
+        records = references_from_options(self.spec.analysis_options)
+        if add:
+            dialog = ItReferenceSettingsDialog(unit_info, parent=self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            records.append(dialog.record)
+        else:
+            dialog = ItReferenceManagerDialog(records, unit_info, selected_id, self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            records = dialog.records
+        store_references(self.spec.analysis_options, records)
+        self.redraw()
+        self.plot_changed.emit(self)
 
     def _set_canvas_ratio(self, ratio: float | None) -> None:
         overrides = dict(self.spec.overrides)
@@ -265,12 +302,21 @@ class PlotTab(QWidget):
             overrides["figure_size"] = canvas_size_for_ratio(ratio)
             overrides["axes_aspect"] = "auto"
         self._fit_to_view = True
+        self._sync_fit_action()
         self.apply_overrides(overrides)
         self.plot_changed.emit(self)
 
     def set_fit_to_view(self, enabled: bool) -> None:
         self._fit_to_view = bool(enabled)
+        self._sync_fit_action()
         self._update_canvas_geometry()
+
+    def _sync_fit_action(self) -> None:
+        action = getattr(self, "_settings_fit_action", None)
+        if action is not None and isValid(action):
+            action.blockSignals(True)
+            action.setChecked(self._fit_to_view)
+            action.blockSignals(False)
 
     def _update_canvas_geometry(self) -> None:
         area = self.canvas_host.contentsRect()
@@ -303,15 +349,15 @@ class PlotTab(QWidget):
         self.spec.annotations = bool(self.base_style.annotation)
         for key in ("color_overrides", "bar_width", "bar_alpha", "fill_alpha", "line_alpha"):
             self.spec.analysis_options.pop(key, None)
+        role_colors = self.spec.analysis_options.get("color_overrides_by_role")
+        if isinstance(role_colors, dict):
+            remaining = {key: value for key, value in role_colors.items() if key not in ("graphics", "text")}
+            if remaining:
+                self.spec.analysis_options["color_overrides_by_role"] = remaining
+            else:
+                self.spec.analysis_options.pop("color_overrides_by_role", None)
         self.redraw()
         self.plot_changed.emit(self)
-
-    def set_preset_name(self, name: str) -> None:
-        index = self.preset_combo.findData(name)
-        if index >= 0 and index != self.preset_combo.currentIndex():
-            self.preset_combo.blockSignals(True)
-            self.preset_combo.setCurrentIndex(index)
-            self.preset_combo.blockSignals(False)
 
     def update_context(
         self,
@@ -334,15 +380,6 @@ class PlotTab(QWidget):
             self.text_values = dict(text_values)
         if user_presets is not None:
             self.user_presets = user_presets
-            current = self.spec.preset
-            self.preset_combo.blockSignals(True)
-            self.preset_combo.clear()
-            for name in preset_names(user_presets):
-                self.preset_combo.addItem(preset_label(name, user_presets), name)
-            index = self.preset_combo.findData(current)
-            if index >= 0:
-                self.preset_combo.setCurrentIndex(index)
-            self.preset_combo.blockSignals(False)
 
     def set_style(self, style: PlotStyle, *, clear_overrides: bool = True) -> None:
         self.base_style = style
@@ -350,7 +387,6 @@ class PlotTab(QWidget):
             self.spec.overrides = {}
         self.style = style.with_overrides(self.spec.overrides)
         self.spec.preset = style.name
-        self.set_preset_name(style.name)
         self.redraw()
 
     def set_text_values(self, values: dict | None, *, redraw: bool = True) -> None:
@@ -367,23 +403,6 @@ class PlotTab(QWidget):
         self.style = self.base_style.with_overrides(self.spec.overrides)
         self.redraw()
 
-    def _on_follow_toggled(self, checked: bool) -> None:
-        self.spec.follow_dataset = checked
-        self.follow_changed.emit(self, checked)
-
-    def set_follow_dataset(self, checked: bool) -> None:
-        self.follow_cb.blockSignals(True)
-        self.follow_cb.setChecked(checked)
-        self.follow_cb.blockSignals(False)
-        self.spec.follow_dataset = checked
-
-    def _refresh_data_button(self) -> None:
-        count = len(self.spec.run_ids)
-        self.data_btn.setText(f"数据 ({count})...")
-        self.data_btn.setToolTip(
-            f"本图当前选择 {count} 个数据；点击选择绘制数据和本图图例模板"
-        )
-
     def mark_dirty(self) -> None:
         """Request a redraw when the tab becomes visible again."""
         self.dirty = True
@@ -391,10 +410,8 @@ class PlotTab(QWidget):
     def redraw(self) -> None:
         self.style = self.base_style.with_overrides(self.spec.overrides)
         self.style = self.style.with_overrides(paper_overrides(self.spec.paper_layout, self.style))
-        self.title_label.setText(self.spec.title or self.spec.label)
         self.canvas.set_logical_size(self.style.figure_size)
         self._update_canvas_geometry()
-        self._refresh_data_button()
         try:
             self.warnings = render_plot(
                 self.figure,

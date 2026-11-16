@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,8 @@ PLOT_KINDS = {
     "eis_fit": "EIS 拟合",
     "cp_gcd": "CP / GCD 电位-时间",
     "cp_capacity": "GCD 容量-循环",
+    "lsv_curve": "LSV 电流-电位",
+    "it_curve": "I-T 电流-时间",
 }
 
 
@@ -45,7 +48,6 @@ class PlotSpec:
     x_log: bool = False
     renumber_cycles: bool = False
     legend_templates: dict[str, str] = field(default_factory=dict)
-    follow_dataset: bool = False
     analysis_options: dict[str, Any] = field(default_factory=dict)
     paper_layout: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
@@ -76,15 +78,14 @@ class PlotSpec:
             x_log=self.x_log,
             renumber_cycles=self.renumber_cycles,
             legend_templates=dict(self.legend_templates),
-            follow_dataset=self.follow_dataset,
-            analysis_options=dict(self.analysis_options),
+            analysis_options=deepcopy(self.analysis_options),
             paper_layout=dict(self.paper_layout),
             extra=dict(self.extra),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            **self.extra,
+            **{key: value for key, value in self.extra.items() if key != "follow_dataset"},
             "kind": self.kind,
             "run_ids": list(self.run_ids),
             "cycle_selection": {key: list(value) for key, value in self.cycle_selection.items()},
@@ -105,14 +106,16 @@ class PlotSpec:
             "x_log": self.x_log,
             "renumber_cycles": self.renumber_cycles,
             "legend_templates": dict(self.legend_templates),
-            "follow_dataset": self.follow_dataset,
             "analysis_options": dict(self.analysis_options),
             "paper_layout": dict(self.paper_layout),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlotSpec":
+        data = dict(data)
+        data.pop("follow_dataset", None)
         allowed = set(cls.__dataclass_fields__)
         values = {key: value for key, value in data.items() if key in allowed}
         values["extra"] = {**values.get("extra", {}), **{key: value for key, value in data.items() if key not in allowed}}
+        values["extra"].pop("follow_dataset", None)
         return cls(**values)

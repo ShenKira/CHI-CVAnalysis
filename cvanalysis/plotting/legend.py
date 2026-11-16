@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import re
+import math
+import numpy as np
 from collections.abc import Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 from cvanalysis.domain.models import CPRun, CVRun, EISRun, abbreviate_name
-from cvanalysis.plotting.texts import text_from_values
+from cvanalysis.plotting.texts import safe_format, text_from_values
+from cvanalysis.plotting.template_format import DisplayRange, DisplayValue, TemplateError, format_template, literal_fallback
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,11 @@ LEGEND_TOKENS: tuple[LegendToken, ...] = (
     LegendToken("Cycle_Number", "循环号", "循环序号；勾选重编号时使用显示序号", "cv"),
     LegendToken("High_Freq", "高频", "EIS 最高频率", "eis"),
     LegendToken("Low_Freq", "低频", "EIS 最低频率", "eis"),
-    LegendToken("Points", "点数", "数据点数", "eis"),
+    LegendToken("Points", "点数", "数据点数"),
+    LegendToken("IT_Potential", "I-T 施加电位", "I-T 初始电位，例如 1.5V", "it"),
+    LegendToken("IT_Run_Time", "I-T 运行时间", "设定运行时间，单位 s", "it"),
+    LegendToken("IT_Sample_Interval", "I-T 采样间隔", "采样时间间隔，单位 s", "it"),
+    LegendToken("IT_Quiet_Time", "I-T 静置时间", "实验静置时间，单位 s", "it"),
     LegendToken("Current", "CP 电流", "CP 施加电流，自动选择 A/mA/µA 单位", "cp"),
     LegendToken("CP_Window", "CP 电位窗口", "CP 高电位减低压", "cp"),
     LegendToken("Hold_Time", "保持时间", "CP 高/低电位保持时间；无记录时为空", "cp"),
@@ -49,6 +56,35 @@ LEGEND_TOKENS: tuple[LegendToken, ...] = (
 
 _TOKEN_LOOKUP = {token.token.lower(): token for token in LEGEND_TOKENS}
 _TOKEN_PATTERN = re.compile(r"\{([^{}]+)\}")
+
+
+def is_blank_legend_template(template: str) -> bool:
+    """Distinguish an explicit empty legend from an inherited empty input."""
+    return bool(re.fullmatch(r"\{\s*\}", str(template or "").strip()))
+
+
+def remember_legend_sources(legend, handles, labels):
+    """Keep the original artists/containers used to build a legend.
+
+    Matplotlib's legend_handles contains representative drawn artists, which
+    can omit parts of composite entries such as an ErrorbarContainer marker.
+    """
+    legend._cvanalysis_sources = (list(handles), list(labels))
+    return legend
+
+
+def legend_sources(axis, legend):
+    """Recover original entries while preserving displayed labels and order."""
+    stored = getattr(legend, "_cvanalysis_sources", None)
+    if stored is not None:
+        return list(stored[0]), list(stored[1])
+    handles, labels = axis.get_legend_handles_labels()
+    displayed = [text.get_text() for text in legend.get_texts()]
+    if len(handles) == len(displayed):
+        return handles, displayed
+    # Unknown custom legends may contain explicit proxy artists not attached
+    # to the axes. Keep their original appearance rather than dropping items.
+    return list(legend.legend_handles), displayed
 
 DEFAULT_CYCLE_LEGEND_LIMIT = 10
 
@@ -121,7 +157,7 @@ def template_uses_cycle(template: str) -> bool:
     template = str(template or "")
     if not template:
         return False
-    return any(_normalize_token(match.group(1)) in {"cycle_number", "cycle_n"} for match in _TOKEN_PATTERN.finditer(template))
+    return any(_normalize_token(match.group(1).split(":", 1)[0]) in {"cycle_number", "cycle_n"} for match in _TOKEN_PATTERN.finditer(template))
 
 
 def file_numbers_for_runs(runs: Iterable[CVRun | EISRun | CPRun]) -> dict[str, int]:
@@ -142,6 +178,8 @@ def dataset_file_numbers(dataset) -> dict[str, int]:
             *getattr(dataset, "cv_runs", []),
             *getattr(dataset, "eis_runs", []),
             *getattr(dataset, "cp_runs", []),
+            *getattr(dataset, "lsv_runs", []),
+            *getattr(dataset, "it_runs", []),
         ]
     )
 
@@ -152,19 +190,38 @@ def dataset_runs(dataset) -> list[CVRun | EISRun | CPRun]:
         *getattr(dataset, "cv_runs", []),
         *getattr(dataset, "eis_runs", []),
         *getattr(dataset, "cp_runs", []),
+        *getattr(dataset, "lsv_runs", []),
+        *getattr(dataset, "it_runs", []),
     ]
 
 
-def _format_number(value: float | None, unit: str = "") -> str:
-    if value is None:
-        return ""
+def _format_number(value: float | None, unit: str = "") -> DisplayValue:
+    allowed = (int, float, str, np.float16, np.float32, np.float64,
+               np.int8, np.int16, np.int32, np.int64,
+               np.uint8, np.uint16, np.uint32, np.uint64)
+    if type(value) not in allowed or (type(value) is str and len(value) > 128):
+        return DisplayValue(None, "", unit)
     try:
         number = float(value)
-    except (TypeError, ValueError):
-        return ""
-    if not (number == number):
-        return ""
-    return f"{number:g}{unit}"
+    except (TypeError, ValueError, OverflowError):
+        number = None
+    if number is not None and not math.isfinite(number):
+        number = None
+    return DisplayValue(number, f"{number:g}{unit}" if number is not None else "", unit)
+
+
+def _format_integer(value) -> DisplayValue:
+    if value is not None and (type(value) not in (int, str, np.int32, np.int64) or
+                              (type(value) is str and len(value) > 128)):
+        return DisplayValue(None, "")
+    if isinstance(value, str) and re.fullmatch(r"\d+-\d+", value):
+        first, last = value.split("-", 1)
+        return DisplayRange(int(first), int(last), value)
+    try:
+        number = int(value) if value is not None else None
+    except (ValueError, TypeError, OverflowError):
+        number = value
+    return DisplayValue(number, str(value) if value is not None else "")
 
 
 def _context(run: CVRun | EISRun | CPRun, cycle=None, cycle_number: int | None = None,
@@ -173,9 +230,9 @@ def _context(run: CVRun | EISRun | CPRun, cycle=None, cycle_number: int | None =
     values: dict[str, str] = {
         "file_name": source_name,
         "sample_name": run.display_name,
-        "alias": str(getattr(run, "legend_alias", "") or "").strip(),
-        "run_index": str(run.run_index + 1),
-        "file_n": str(file_number) if file_number is not None else "",
+        "alias": safe_format(str(getattr(run, "legend_alias", "") or "").strip(), {}),
+        "run_index": _format_integer(run.run_index + 1),
+        "file_n": _format_integer(file_number),
         "area_cm2": _format_number(run.params.area_cm2, "cm²"),
         "mass_mg": _format_number(run.params.mass_mg, "mg"),
     }
@@ -196,9 +253,9 @@ def _context(run: CVRun | EISRun | CPRun, cycle=None, cycle_number: int | None =
                 "cv_high": _format_number(high, "V"),
                 "cv_window": _format_number(window, "V"),
                 "scan_rate": _format_number(run.metadata.scan_rate, "V/s"),
-                "cycle_number": str(cycle_number if cycle_number is not None else (cycle.index if cycle is not None else "")),
-                "cycle_n": str(cycle.index) if cycle is not None else "",
-                "points": str(len(run.potential)),
+                "cycle_number": _format_integer(cycle_number if cycle_number is not None else (cycle.index if cycle is not None else None)),
+                "cycle_n": _format_integer(cycle.index if cycle is not None else None),
+                "points": _format_integer(len(run.potential)),
             }
         )
     elif isinstance(run, EISRun):
@@ -206,18 +263,29 @@ def _context(run: CVRun | EISRun | CPRun, cycle=None, cycle_number: int | None =
             {
                 "high_freq": _format_number(run.metadata.high_freq, "Hz"),
                 "low_freq": _format_number(run.metadata.low_freq, "Hz"),
-                "points": str(len(run.freq)),
+                "points": _format_integer(len(run.freq)),
             }
         )
-    else:
+    elif isinstance(run, CPRun):
         values.update(
             {
                 "current": _format_number(run.applied_current_A, "A"),
                 "cp_window": _format_number(run.voltage_window, "V"),
                 "hold_time": _format_number(run.metadata.hold_duration_s, "s"),
-                "points": str(len(run.time)),
+                "points": _format_integer(len(run.time)),
             }
         )
+    else:
+        values.update({"points": _format_integer(len(run.x))})
+        if getattr(run, "kind", None) == "it":
+            raw = getattr(run.metadata, "raw", {}) or {}
+            def metadata_number(prefix, unit):
+                value = next((v for k, v in raw.items() if k.casefold().startswith(prefix)), None)
+                return _format_number(value, unit)
+            values.update({"it_potential": metadata_number("init e", "V"),
+                           "it_run_time": metadata_number("run time", "s"),
+                           "it_sample_interval": metadata_number("sample interval", "s"),
+                           "it_quiet_time": metadata_number("quiet time", "s")})
     return values
 
 
@@ -237,21 +305,33 @@ def render_legend_template(
     template = str(template or "")
     if not template:
         return "", []
-    values = _context(run, cycle=cycle, cycle_number=cycle_number, file_number=file_number)
+    if is_blank_legend_template(template):
+        return "", []
+    values = {name: DisplayValue(None, "") for name in _TOKEN_LOOKUP}
+    values.update(_context(run, cycle=cycle, cycle_number=cycle_number, file_number=file_number))
     unknown: list[str] = []
-
-    def replace(match: re.Match[str]) -> str:
+    for match in _TOKEN_PATTERN.finditer(template):
         raw = match.group(1)
-        key = _normalize_token(raw)
-        if key not in _TOKEN_LOOKUP:
-            if raw not in unknown:
-                unknown.append(raw)
-            return match.group(0)
-        value = values.get(key, "")
-        return value
+        in_math = len(re.findall(r"(?<!\\)\$", template[:match.start()])) % 2 == 1
+        if not in_math and _normalize_token(raw.split(":", 1)[0]) not in _TOKEN_LOOKUP and raw not in unknown:
+            unknown.append(raw)
+    try:
+        result = format_template(template, values, normalize=_normalize_token)
+    except TemplateError:
+        # Old/imported invalid templates remain literal and cannot execute.
+        return literal_fallback(template), unknown + ["格式无效"]
+    return result, unknown
 
-    return _TOKEN_PATTERN.sub(replace, template), unknown
 
+
+def validate_legend_template(template: str) -> None:
+    """Validate editor input against all supported legend fields."""
+    if not template or is_blank_legend_template(template):
+        return
+    text_fields = {"file_name", "sample_name", "alias"}
+    values = {key: ("sample" if key in text_fields else DisplayValue(1, "1"))
+              for key in _TOKEN_LOOKUP}
+    format_template(template, values, strict=True, normalize=_normalize_token)
 
 def effective_template(run: CVRun | EISRun | CPRun, spec) -> str:
     """Resolve the per-plot override, then the data-level template."""
@@ -275,6 +355,8 @@ def preview_label(
     fallback: str | None = None,
 ) -> tuple[str, list[str]]:
     if template:
+        if is_blank_legend_template(template):
+            return "", []
         rendered, unknown = render_legend_template(
             template,
             run,
@@ -388,6 +470,9 @@ def _compact_label(
     file_number: int | None = None,
     text_values: dict | None = None,
 ) -> str:
+    from cvanalysis.domain.models import SweepRun
+    if isinstance(run, SweepRun):
+        return default_filename_label(run)
     values = text_values
     if values is None and spec is not None:
         values = getattr(spec, "_cv_text_values", None)
@@ -428,7 +513,7 @@ def resolve_legend_labels(
     for run in ordered:
         alias = str(getattr(run, "legend_alias", "") or "").strip()
         if alias:
-            result[run.run_id] = ResolvedLegendLabel(alias, manual=True)
+            result[run.run_id] = ResolvedLegendLabel(safe_format(alias, {}), manual=True)
         elif run.run_id in compact_ids:
             result[run.run_id] = ResolvedLegendLabel(
                 _compact_label(

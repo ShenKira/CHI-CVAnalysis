@@ -287,6 +287,20 @@ class CPRun:
             and len(self.hold_current) == len(self.hold_time)
         )
 
+    def hold_description(self) -> str:
+        """Describe recorded or configured hold stages without treating absence as an error."""
+        details = []
+        if self.has_hold_data:
+            details.append("包含保持段电流")
+        elif any(value is not None and np.isfinite(value) and value > 0
+                 for value in (self.metadata.high_hold_s, self.metadata.low_hold_s)):
+            details.append("保持段参数配置")
+        for name, value in (("高电位保持", self.metadata.high_hold_s),
+                            ("低电位保持", self.metadata.low_hold_s)):
+            if value is not None and np.isfinite(value) and value > 0:
+                details.append(f"{name} {value:g} s")
+        return "；".join(details)
+
     @property
     def applied_current_A(self) -> float | None:
         for value in (self.metadata.anodic_current_A, self.metadata.cathodic_current_A):
@@ -349,22 +363,65 @@ class EISRun:
 
 
 @dataclass
+class SweepMetadata:
+    technique: str = ""
+    raw: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class SweepRun:
+    """Single-pass LSV or amperometric i-t acquisition in SI units."""
+    run_id: str
+    name: str
+    kind: str
+    x: np.ndarray
+    current: np.ndarray
+    metadata: SweepMetadata
+    source: Path | None = None
+    run_index: int = 0
+    params: ElectrodeParams = field(default_factory=ElectrodeParams)
+    warnings: list[str] = field(default_factory=list)
+    legend_template: str = ""
+    legend_alias: str = ""
+    parser_id: str = ""
+    parser_version: int = 1
+
+    @property
+    def display_name(self):
+        return self.name or (self.source.stem if self.source else self.run_id)
+
+    @property
+    def display_short_name(self):
+        return abbreviate_name(self.display_name, 34)
+
+    @property
+    def legend_name(self):
+        return self.legend_alias.strip() or abbreviate_name(self.display_name, 26)
+
+    def add_warning(self, message):
+        if message not in self.warnings:
+            self.warnings.append(message)
+
+
+@dataclass
 class Dataset:
     name: str = "未命名数据集"
     path: Path | None = None
     cv_runs: list[CVRun] = field(default_factory=list)
     eis_runs: list[EISRun] = field(default_factory=list)
     cp_runs: list[CPRun] = field(default_factory=list)
+    lsv_runs: list[SweepRun] = field(default_factory=list)
+    it_runs: list[SweepRun] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not self.cv_runs and not self.eis_runs and not self.cp_runs
+        return not self.cv_runs and not self.eis_runs and not self.cp_runs and not self.lsv_runs and not self.it_runs
 
-    def all_runs(self) -> list[CVRun | EISRun | CPRun]:
-        return [*self.cv_runs, *self.eis_runs, *self.cp_runs]
+    def all_runs(self) -> list[CVRun | EISRun | CPRun | SweepRun]:
+        return [*self.cv_runs, *self.eis_runs, *self.cp_runs, *self.lsv_runs, *self.it_runs]
 
-    def find_run(self, run_id: str) -> CVRun | EISRun | CPRun | None:
+    def find_run(self, run_id: str) -> CVRun | EISRun | CPRun | SweepRun | None:
         for run in self.all_runs():
             if run.run_id == run_id:
                 return run
@@ -379,11 +436,13 @@ class Dataset:
     def find_cp(self, run_id: str) -> CPRun | None:
         return next((run for run in self.cp_runs if run.run_id == run_id), None)
 
-    def add_runs(self, runs: Iterable[CVRun | EISRun | CPRun], *, replace: bool = False) -> None:
+    def add_runs(self, runs: Iterable[CVRun | EISRun | CPRun | SweepRun], *, replace: bool = False) -> None:
         if replace:
             self.cv_runs.clear()
             self.eis_runs.clear()
             self.cp_runs.clear()
+            self.lsv_runs.clear()
+            self.it_runs.clear()
         for run in runs:
             if isinstance(run, CVRun):
                 self.cv_runs.append(run)
@@ -391,22 +450,35 @@ class Dataset:
                 self.eis_runs.append(run)
             elif isinstance(run, CPRun):
                 self.cp_runs.append(run)
+            elif isinstance(run, SweepRun):
+                if run.kind == "lsv":
+                    self.lsv_runs.append(run)
+                elif run.kind == "it":
+                    self.it_runs.append(run)
+                else:
+                    raise ValueError(f"未知实验类型: {run.kind}")
 
     def remove_run(self, run_id: str) -> None:
         self.cv_runs = [run for run in self.cv_runs if run.run_id != run_id]
         self.eis_runs = [run for run in self.eis_runs if run.run_id != run_id]
         self.cp_runs = [run for run in self.cp_runs if run.run_id != run_id]
+        self.lsv_runs = [run for run in self.lsv_runs if run.run_id != run_id]
+        self.it_runs = [run for run in self.it_runs if run.run_id != run_id]
 
     def merge(self, other: "Dataset") -> None:
         self.cv_runs.extend(other.cv_runs)
         self.eis_runs.extend(other.eis_runs)
         self.cp_runs.extend(other.cp_runs)
+        self.lsv_runs.extend(other.lsv_runs)
+        self.it_runs.extend(other.it_runs)
         self.warnings.extend(other.warnings)
 
     def clear(self) -> None:
         self.cv_runs.clear()
         self.eis_runs.clear()
         self.cp_runs.clear()
+        self.lsv_runs.clear()
+        self.it_runs.clear()
         self.warnings.clear()
 
     def apply_params(self, params: ElectrodeParams, *, run_ids: Iterable[str] | None = None) -> None:

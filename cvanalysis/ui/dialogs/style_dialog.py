@@ -9,14 +9,19 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QLabel,
     QLineEdit,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from cvanalysis.plotting.style import CANVAS_HEIGHT_IN, PlotStyle
+from cvanalysis.ui.layout import fit_dialog
+from cvanalysis.ui.theme import apply_button_role
 
 
 class StyleEditorDialog(QDialog):
@@ -24,12 +29,22 @@ class StyleEditorDialog(QDialog):
         super().__init__(parent)
         self.style = style
         self.setWindowTitle("编辑当前绘图样式")
-        scale = max(1.0, min(1.6, self.font().pointSizeF() / 11.0))
-        self.resize(int(520 * scale), int(700 * scale))
         self._build_ui()
+        fit_dialog(self, 540, 720, min_width=440, min_height=500)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.setContentsMargins(2, 2, 2, 2)
+        body.setSpacing(10)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
 
         group = QGroupBox("版式与字体")
         form = QFormLayout(group)
@@ -64,8 +79,9 @@ class StyleEditorDialog(QDialog):
         self.legend_size_spin.setValue(self.style.legend_size)
         form.addRow("图例字号:", self.legend_size_spin)
         self.font_family_edit = QLineEdit(", ".join(self.style.font_family))
+        self.font_family_edit.setCursorPosition(0)
         form.addRow("字体族（逗号分隔）:", self.font_family_edit)
-        layout.addWidget(group)
+        body.addWidget(group)
 
         lines = QGroupBox("线条与坐标轴")
         line_form = QFormLayout(lines)
@@ -108,15 +124,24 @@ class StyleEditorDialog(QDialog):
         self.annotation_cb = QCheckBox("显示统计注释")
         self.annotation_cb.setChecked(self.style.annotation)
         line_form.addRow(self.annotation_cb)
-        layout.addWidget(lines)
+        body.addWidget(lines)
 
         colors = QGroupBox("颜色序列")
         color_form = QFormLayout(colors)
         self.colors_edit = QLineEdit(", ".join(self.style.color_cycle))
         color_form.addRow("逗号分隔的十六进制颜色:", self.colors_edit)
-        layout.addWidget(colors)
+        body.addWidget(colors)
+        body.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        ok_button = buttons.button(QDialogButtonBox.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        if ok_button is not None:
+            ok_button.setText("确定")
+            ok_button.setDefault(True)
+            apply_button_role(ok_button, "primary", pill=True)
+        if cancel_button is not None:
+            cancel_button.setText("取消")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)

@@ -36,6 +36,7 @@ class MetricTreeModel(QAbstractItemModel):
         self.headers = list(headers or [])
         self.rows: list[list[Any]] = []
         self.colors: dict[tuple[int, int], str] = {}
+        self.numeric_columns: set[int] = set()
         self._root = _MetricNode([])
         self._run_nodes: dict[str, _MetricNode] = {}
 
@@ -147,6 +148,8 @@ class MetricTreeModel(QAbstractItemModel):
             value = node.values[index.column()]
             return "" if value is None else str(value)
         if role == Qt.TextAlignmentRole:
+            if index.column() in self.numeric_columns:
+                return int(Qt.AlignRight | Qt.AlignVCenter)
             return int(Qt.AlignLeft | Qt.AlignVCenter)
         if role == Qt.ToolTipRole:
             value = node.values[index.column()]

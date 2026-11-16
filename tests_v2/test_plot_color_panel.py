@@ -10,7 +10,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDoubleSpinBox
 
 from cvanalysis.domain.models import Dataset
-from cvanalysis.plotting.colors import apply_color_overrides, detect_figure_colors
+from cvanalysis.plotting.colors import apply_color_overrides, detect_figure_color_groups, detect_figure_colors
 from cvanalysis.plotting.presets import BUILTIN_PRESETS
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.ui.dialogs.plot_inspector_dialog import PlotInspectorDialog
@@ -28,6 +28,60 @@ def test_detected_colors_put_text_colors_last():
     colors = detect_figure_colors(figure)
     assert "#1f77b4" in colors
     assert colors[-1] == "#000000"
+
+
+def test_shared_graphic_and_text_color_can_be_changed_independently():
+    figure = Figure()
+    ax = figure.add_subplot(111)
+    line, = ax.plot([0, 1], [0, 1], color="#000000")
+    text = ax.text(0.5, 0.5, "label", color="#000000")
+    groups = detect_figure_color_groups(figure)
+    assert "#000000" in groups["graphics"] and "#000000" in groups["text"]
+    apply_color_overrides(figure, {"#000000": "#008800"},
+                          {"graphics": {"#008800": "#ff0000"}})
+    assert mcolors.to_hex(line.get_color()) == "#ff0000"
+    assert mcolors.to_hex(text.get_color()) == "#008800"
+
+
+def test_role_color_replacement_preserves_graphics_opacity():
+    figure = Figure()
+    ax = figure.add_subplot(111)
+    bar = ax.bar([0], [1], color=(0.1, 0.2, 0.3, 0.25))[0]
+    source = mcolors.to_hex(bar.get_facecolor())
+    apply_color_overrides(figure, None, {"graphics": {source: "#ff0000"}})
+    assert mcolors.to_hex(bar.get_facecolor()) == "#ff0000"
+    assert bar.get_facecolor()[3] == pytest.approx(0.25)
+
+
+def test_new_role_color_maps_round_trip_without_losing_legacy(tmp_path, synthetic_cv_runs):
+    from cvanalysis.services.project_service import load_project, save_project
+
+    dataset = Dataset(cv_runs=list(synthetic_cv_runs))
+    options = {"color_overrides": {"#000000": "#008800"},
+               "color_overrides_by_role": {"graphics": {"#008800": "#ff0000"},
+                                           "text": {"#008800": "#0000ff"}},
+               "future_option": {"keep": True}}
+    spec = PlotSpec("cv_overlay", [synthetic_cv_runs[0].run_id], analysis_options=options)
+    path = tmp_path / "role-colors.cvproj"
+    save_project(path, dataset, plots=[spec])
+    loaded = load_project(path).plots[0]
+    assert loaded.analysis_options == options
+
+
+@pytest.mark.parametrize("placement", ["normal", "inside", "outside"])
+def test_text_color_survives_legend_layout(placement, synthetic_cv_runs):
+    from cvanalysis.plotting.export import render_to_new_figure
+
+    dataset = Dataset(cv_runs=list(synthetic_cv_runs))
+    spec = PlotSpec("cv_cap_scan", [run.run_id for run in synthetic_cv_runs],
+                    analysis_options={"color_overrides_by_role": {"text": {"#000000": "#ff00ff"}}})
+    if placement != "normal":
+        spec.paper_layout = {"enabled": True, "legend_placement": placement}
+    figure = render_to_new_figure(dataset, spec, BUILTIN_PRESETS["daily"])
+    figure.canvas.draw()
+    legend = figure.axes[0].get_legend() or (figure.legends[0] if figure.legends else None)
+    assert legend is not None and legend.get_texts()
+    assert all(mcolors.to_hex(label.get_color()) == "#ff00ff" for label in legend.get_texts())
 
 
 def test_color_overrides_remap_lines_patches_and_text():
@@ -86,16 +140,104 @@ def test_plot_color_panel_changes_current_plot_only():
     colors = detect_figure_colors(tab.figure)
     # The synthetic plot has text; fall back to a real figure color when empty.
     old_color = colors[0] if colors else "#1f77b4"
-    with patch(
-        "cvanalysis.ui.widgets.plot_color_panel.QColorDialog.getColor",
-        return_value=QColor("#ff0000"),
-    ):
-        panel._choose_color(old_color)
-    assert tab.spec.analysis_options["color_overrides"][old_color] == "#ff0000"
+    role = next(role for role, colors in detect_figure_color_groups(tab.figure).items() if old_color in colors)
+    panel._select_color(role, old_color)
+    panel.palette.setCurrentColor(QColor("#ff0000"))
+    panel._apply_selected_color()
+    assert tab.spec.analysis_options["color_overrides_by_role"][role][old_color] == "#ff0000"
     assert other.spec.analysis_options.get("color_overrides") is None
     tab.deleteLater()
     other.deleteLater()
     panel.deleteLater()
+    app.processEvents()
+
+
+def test_inline_picker_repeated_edits_keep_text_and_legacy_separate():
+    app = QApplication.instance() or QApplication([])
+
+    class ExamplePlot:
+        def __init__(self):
+            self.spec = PlotSpec("cv_overlay", analysis_options={
+                "color_overrides": {"#000000": "#008800"},
+                "future_option": "keep",
+            })
+            self.figure = Figure()
+            self.redraw()
+
+        def redraw(self):
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            self.line, = ax.plot([0, 1], [0, 1], color="#000000")
+            self.text = ax.text(0.5, 0.5, "label", color="#000000")
+            apply_color_overrides(self.figure, self.spec.analysis_options.get("color_overrides"),
+                                  self.spec.analysis_options.get("color_overrides_by_role"))
+
+    tab = ExamplePlot()
+    panel = PlotColorPanel()
+    panel.bind(tab)
+    assert ("graphics", "#008800") in panel._buttons
+    assert ("text", "#008800") in panel._buttons
+    panel._select_color("graphics", "#008800")
+    panel.palette.setCurrentColor(QColor("#ff0000"))
+    panel.apply_button.click()
+    assert mcolors.to_hex(tab.line.get_color()) == "#ff0000"
+    assert mcolors.to_hex(tab.text.get_color()) == "#008800"
+    panel._select_color("graphics", "#ff0000")
+    panel.palette.setCurrentColor(QColor("#0000ff"))
+    panel.apply_button.click()
+    tab.redraw()
+    assert mcolors.to_hex(tab.line.get_color()) == "#0000ff"
+    assert mcolors.to_hex(tab.text.get_color()) == "#008800"
+    assert tab.spec.analysis_options["color_overrides"] == {"#000000": "#008800"}
+    tab.spec.analysis_options["color_overrides_by_role"]["future_role"] = {"keep": "data"}
+    panel._reset_colors()
+    assert tab.spec.analysis_options == {
+        "future_option": "keep", "color_overrides_by_role": {"future_role": {"keep": "data"}}
+    }
+    panel.bind(None)
+    assert not panel.palette.isEnabled() and not panel.apply_button.isEnabled()
+    panel.deleteLater()
+    app.processEvents()
+
+
+def test_inline_picker_accepts_exact_color_without_applying_until_requested():
+    from cvanalysis.ui.widgets.inline_color_picker import InlineColorPicker
+
+    app = QApplication.instance() or QApplication([])
+    picker = InlineColorPicker()
+    picker.show()
+    app.processEvents()
+    picker.hex_input.setText("#123abc")
+    picker.hex_input.editingFinished.emit()
+    assert picker.currentColor().name() == "#123abc"
+    picker.hex_input.setText("not-a-color")
+    picker.hex_input.editingFinished.emit()
+    assert picker.hex_input.text() == "#123abc"
+    picker.setCurrentColor(QColor("black"))
+    QTest.mouseClick(picker.field, Qt.LeftButton, pos=picker.field.rect().center())
+    assert picker.currentColor() != QColor("black")
+    picker.close()
+    picker.deleteLater()
+    app.processEvents()
+
+
+def test_inline_picker_fits_small_inspector(synthetic_cv_runs):
+    app = QApplication.instance() or QApplication([])
+    dataset = Dataset(cv_runs=list(synthetic_cv_runs))
+    tab = PlotTab(PlotSpec("cv_overlay", [synthetic_cv_runs[0].run_id]), BUILTIN_PRESETS["daily"], dataset)
+    dialog = PlotInspectorDialog(tab)
+    dialog.resize(540, 500)
+    dialog.show()
+    app.processEvents()
+    panel = dialog.color_panel
+    for widget in (panel.palette.field, panel.palette.hex_input, panel.apply_button):
+        assert widget.isVisible()
+        top_left = widget.mapTo(dialog, QPoint())
+        assert dialog.rect().contains(top_left)
+        assert dialog.rect().contains(top_left + QPoint(widget.width() - 1, widget.height() - 1))
+    dialog.close()
+    dialog.deleteLater()
+    tab.deleteLater()
     app.processEvents()
 
 
@@ -106,7 +248,12 @@ def test_inspector_bar_width_takes_effect(synthetic_cv_runs):
     tab = PlotTab(spec, BUILTIN_PRESETS["daily"], dataset)
     dialog = PlotInspectorDialog(tab)
     dialog.bar_width_spin.setValue(0.4)
-    QTest.qWait(150)
+    # The inspector intentionally debounces updates; allow a busy Qt event
+    # loop to deliver the timer instead of assuming a fixed 150 ms deadline.
+    for _ in range(100):
+        if spec.analysis_options.get("bar_width") == 0.4:
+            break
+        QTest.qWait(20)
     assert spec.analysis_options["bar_width"] == 0.4
     assert tab.figure.axes[0].patches[0].get_width() == 0.4
     dialog.deleteLater()
@@ -122,6 +269,7 @@ def test_plot_context_menu_ratio_and_fit_to_tab(synthetic_cv_runs):
     menu = tab._build_context_menu()
     labels = [action.text() for action in menu.actions() if action.text()]
     assert "当前图设置..." in labels
+    assert "分析 / 论文选项..." not in labels
     assert "图片比例" in labels
     assert "按比例适应标签页" in labels
     ratio_menu = next(action.menu() for action in menu.actions() if action.text() == "图片比例")
@@ -171,14 +319,20 @@ def test_context_menu_copies_current_vector_plot(synthetic_cv_runs):
         action.trigger()
         copy_mock.assert_called_once()
 
-    tab.copy_vector_plot()
-    app.processEvents()
-    mime = QGuiApplication.clipboard().mimeData()
-    assert mime is not None
-    assert mime.hasFormat("image/svg+xml")
-    svg = bytes(mime.data("image/svg+xml"))
-    assert b"<svg" in svg
-    assert b"</svg>" in svg
+    clipboard = QGuiApplication.clipboard()
+    try:
+        tab.copy_vector_plot()
+        app.processEvents()
+        mime = clipboard.mimeData()
+        assert mime is not None
+        assert mime.hasFormat("image/svg+xml")
+        svg = bytes(mime.data("image/svg+xml"))
+        assert b"<svg" in svg
+        assert b"</svg>" in svg
+    finally:
+        # Qt's offscreen clipboard must release its owned QMimeData before
+        # QApplication is torn down; otherwise Windows can crash at exit.
+        clipboard.clear()
 
     tab.deleteLater()
     menu.deleteLater()
@@ -191,7 +345,8 @@ def test_reset_style_clears_current_plot_overrides(synthetic_cv_runs):
     spec = PlotSpec(
         "cv_contribution_vs_rate",
         [run.run_id for run in synthetic_cv_runs],
-        analysis_options={"bar_width": 0.4, "color_overrides": {"#1f77b4": "#ff0000"}},
+        analysis_options={"bar_width": 0.4, "color_overrides": {"#1f77b4": "#ff0000"},
+                          "color_overrides_by_role": {"text": {"#000000": "#0000ff"}}},
         overrides={"line_width": 3.0},
     )
     tab = PlotTab(spec, BUILTIN_PRESETS["daily"], dataset)
@@ -199,6 +354,7 @@ def test_reset_style_clears_current_plot_overrides(synthetic_cv_runs):
     assert spec.overrides == {}
     assert "bar_width" not in spec.analysis_options
     assert "color_overrides" not in spec.analysis_options
+    assert "color_overrides_by_role" not in spec.analysis_options
     tab.deleteLater()
     app.processEvents()
 

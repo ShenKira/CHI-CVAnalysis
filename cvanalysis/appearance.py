@@ -112,18 +112,23 @@ def load_themes(path: str | Path | None = None) -> list[ThemeDefinition]:
         (item for item in fallback if item.id == DEFAULT_THEME_ID),
         fallback[0] if fallback else None,
     )
+    fallback_by_id = {item.id: item for item in fallback}
     if themes:
         if fallback_default is not None:
             merged: list[ThemeDefinition] = []
             for theme in themes:
-                colors = {**fallback_default.colors, **theme.colors}
+                # Old user theme files predate newly introduced colour roles.
+                # Merge missing roles from the packaged theme with the same id
+                # so a K-ON file does not inherit cool default-blue tokens.
+                base = fallback_by_id.get(theme.id, fallback_default)
+                colors = {**base.colors, **theme.colors}
                 merged.append(
                     ThemeDefinition(
                         theme.id,
                         theme.label,
                         theme.description,
                         colors,
-                        theme.swatches or fallback_default.swatches,
+                        theme.swatches or base.swatches,
                     )
                 )
             return merged

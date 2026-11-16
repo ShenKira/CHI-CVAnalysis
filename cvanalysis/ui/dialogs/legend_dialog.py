@@ -17,15 +17,20 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from cvanalysis.domain.models import CPRun, CVRun, EISRun
-from cvanalysis.ui.theme import apply_theme_role
+from cvanalysis.domain.models import CPRun, CVRun, EISRun, SweepRun
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role
+from cvanalysis.ui.layout import fit_dialog
 from cvanalysis.plotting.legend import (
     file_numbers_for_runs,
+    is_blank_legend_template,
     legend_tokens,
     render_legend_template,
     resolve_legend_labels,
     template_uses_cycle,
+    validate_legend_template,
 )
+from cvanalysis.plotting.template_format import TemplateError, format_template
+from cvanalysis.ui.widgets.formatted_text_preview import FormattedTextPreview
 
 
 def build_token_combo(parent=None, kind: str | None = None) -> QComboBox:
@@ -63,7 +68,7 @@ class LegendTemplateDialog(QDialog):
         self.context_runs = list(context_runs) if context_runs is not None else list(self.runs)
         self.file_numbers = file_numbers if file_numbers is not None else file_numbers_for_runs(self.runs)
         self.setWindowTitle(title)
-        self.setMinimumWidth(560)
+        fit_dialog(self, 620, 520, min_width=440, min_height=360)
         self._build_ui()
         self._refresh_preview()
 
@@ -72,15 +77,14 @@ class LegendTemplateDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
 
-        info = QLabel(
-            f"将应用到 {len(self.runs)} 个数据的默认图例。留空时使用文件名或 Cycle 编号。"
-        )
+        hint = "；输入 { } 不显示图例"
+        info = QLabel(f"将应用到 {len(self.runs)} 个数据的默认图例。留空时使用文件名或 Cycle 编号{hint}。")
         info.setWordWrap(True)
         layout.addWidget(info)
 
         self.template_edit = QLineEdit(self._initial_template())
         kinds = {
-            "cv" if isinstance(run, CVRun) else "cp" if isinstance(run, CPRun) else "eis"
+            "cv" if isinstance(run, CVRun) else "cp" if isinstance(run, CPRun) else run.kind if isinstance(run, SweepRun) else "eis"
             for run in self.runs
         }
         kind = kinds.pop() if len(kinds) == 1 else None
@@ -96,6 +100,8 @@ class LegendTemplateDialog(QDialog):
         hint = QLabel(
             "字段大小写不敏感。逐循环图例请包含 {cycle_n} 或 {Cycle_Number}。"
             "{file_n} 随数据集文件排序更新；{cycle_n} 保持文件内原始循环号。"
+            " 数值可指定格式，如 {CV_Voltage:.2f}；末尾零会保留，精度最多 12 位，不支持运算表达式。"
+            r" 支持 $I_{ref}$ 和公式外 \n 换行。"
         )
         hint.setWordWrap(True)
         apply_theme_role(hint, "hint")
@@ -106,6 +112,8 @@ class LegendTemplateDialog(QDialog):
         self.preview.setReadOnly(True)
         self.preview.setMaximumHeight(110)
         layout.addWidget(self.preview)
+        self.rendered_preview = FormattedTextPreview()
+        layout.addWidget(self.rendered_preview)
 
         self.warning = QLabel("")
         self.warning.setWordWrap(True)
@@ -115,6 +123,8 @@ class LegendTemplateDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        apply_button_role(buttons.button(QDialogButtonBox.Ok), "primary", pill=True)
+        apply_button_role(buttons.button(QDialogButtonBox.Cancel), "secondary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -148,6 +158,7 @@ class LegendTemplateDialog(QDialog):
     def _refresh_preview(self, *args) -> None:
         template = self.template_edit.text()
         lines: list[str] = []
+        first_label = ""
         unknown: list[str] = []
         resolved_labels = resolve_legend_labels(
             self.context_runs,
@@ -170,7 +181,8 @@ class LegendTemplateDialog(QDialog):
                     label, unresolved = render_legend_template(
                         template, run, cycle=item, file_number=self.file_numbers.get(run.run_id)
                     )
-                    labels.append(label if label.strip() else fallback)
+                    labels.append("（不显示图例）" if is_blank_legend_template(template)
+                                  else label if label.strip() else fallback)
                     unresolved_all.extend(unresolved)
                 if not labels:
                     labels = [fallback]
@@ -184,8 +196,11 @@ class LegendTemplateDialog(QDialog):
                     if cycle is not None
                     else f"默认：{run_label}"
                 )
+            if not lines:
+                first_label = label
             lines.append(f"{run.display_name}  →  {label}")
         self.preview.setPlainText("\n".join(lines))
+        self.rendered_preview.show_preview(first_label)
         self.warning.setText(
             "未知字段: " + "、".join("{" + token + "}" for token in unknown)
             if unknown
@@ -193,6 +208,11 @@ class LegendTemplateDialog(QDialog):
         )
 
     def accept(self) -> None:
+        try:
+            validate_legend_template(self.template_edit.text().strip())
+        except TemplateError as exc:
+            QMessageBox.warning(self, "模板格式无效", str(exc))
+            return
         if self.warning.text():
             answer = QMessageBox.question(
                 self,
@@ -223,7 +243,7 @@ class LegendAliasDialog(QDialog):
         self.default_label = default_label or run.legend_name
         self.auto_label = auto_label
         self.setWindowTitle("设置图例/别名")
-        self.setMinimumWidth(520)
+        fit_dialog(self, 560, 460, min_width=420, min_height=320)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -246,6 +266,7 @@ class LegendAliasDialog(QDialog):
 
         hint = QLabel(
             "自动图例由文件名相似度和长度决定；模板中可用 {Alias} 引用这里设置的别名。"
+            r" 别名支持 $I_{ref}$ 和公式外 \n 换行。"
         )
         hint.setWordWrap(True)
         apply_theme_role(hint, "hint")
@@ -253,8 +274,11 @@ class LegendAliasDialog(QDialog):
 
         layout.addWidget(QLabel("预览:"))
         self.preview = QLabel("")
+        self.preview.setTextFormat(Qt.PlainText)
         self.preview.setWordWrap(True)
         layout.addWidget(self.preview)
+        self.rendered_preview = FormattedTextPreview()
+        layout.addWidget(self.rendered_preview)
 
         button_row = QHBoxLayout()
         clear_button = QPushButton("清除别名")
@@ -264,6 +288,8 @@ class LegendAliasDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        apply_button_role(buttons.button(QDialogButtonBox.Ok), "primary", pill=True)
+        apply_button_role(buttons.button(QDialogButtonBox.Cancel), "secondary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         button_row.addWidget(buttons)
@@ -280,7 +306,10 @@ class LegendAliasDialog(QDialog):
         if self.run.legend_template:
             final = f"模板优先（{self.run.legend_template}）"
         elif alias:
-            final = alias
+            try:
+                final = format_template(alias, {}, strict=True)
+            except TemplateError as exc:
+                final = "格式无效：" + str(exc)
         else:
             final = automatic
         self.preview.setText(
@@ -288,6 +317,15 @@ class LegendAliasDialog(QDialog):
             f"自动图例：{self.auto_label or '（未触发）'}\n"
             f"最终：{final}"
         )
+        self.rendered_preview.show_preview(final)
+
+    def accept(self):
+        try:
+            format_template(self.alias_edit.text(), {}, strict=True)
+        except TemplateError as exc:
+            QMessageBox.warning(self, "别名格式无效", str(exc))
+            return
+        super().accept()
 
     def alias(self) -> str:
         return self.alias_edit.text().strip()

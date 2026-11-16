@@ -23,6 +23,7 @@ from cvanalysis.plotting.presets import BUILTIN_PRESETS, preset_label, preset_na
 from cvanalysis.plotting.texts import DEFAULT_TEXT_PRESET_NAME
 from cvanalysis.services.settings_service import SettingsService
 from cvanalysis.ui.dialogs.text_preset_dialog import TextPresetEditorDialog
+from cvanalysis.ui.layout import fit_dialog
 
 
 class PresetManagerDialog(QDialog):
@@ -30,8 +31,7 @@ class PresetManagerDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.setWindowTitle("预设管理")
-        scale = max(1.0, min(1.6, self.font().pointSizeF() / 11.0))
-        self.resize(int(720 * scale), int(560 * scale))
+        fit_dialog(self, 760, 620, min_width=520, min_height=420)
         self._build_ui()
         self._refresh()
 
@@ -43,6 +43,9 @@ class PresetManagerDialog(QDialog):
         self.tabs.addTab(self._build_text_page(), "文本预设")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        close_button = buttons.button(QDialogButtonBox.Close)
+        if close_button is not None:
+            close_button.setText("关闭")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 

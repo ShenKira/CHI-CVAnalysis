@@ -1,1 +1,2 @@
-python start_gui.py
+@echo off
+python "%~dp0start_gui.py" %*

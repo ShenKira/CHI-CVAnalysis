@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from cvanalysis.domain.models import Dataset, ElectrodeParams
+from cvanalysis.ui.theme import theme_color
 from cvanalysis.domain.units import (
     AREAL_CAPACITANCE,
     CAPACITANCE,
@@ -76,6 +77,12 @@ def test_flat_set_data_remains_backward_compatible():
     assert panel.cv_model.rowCount(parent) == 0
     for column, value in enumerate(row):
         assert panel.cv_model.data(panel.cv_model.index(0, column)) == str(value)
+    assert panel.cv_model.data(
+        panel.cv_model.index(0, 1), Qt.TextAlignmentRole
+    ) == int(Qt.AlignRight | Qt.AlignVCenter)
+    assert panel.cv_model.data(
+        panel.cv_model.index(0, 9), Qt.TextAlignmentRole
+    ) == int(Qt.AlignLeft | Qt.AlignVCenter)
     assert panel.cv_model.headerData(0, Qt.Horizontal) == "文件"
 
     panel.deleteLater()
@@ -133,7 +140,7 @@ def test_cv_tree_rows_children_and_normalized_values(synthetic_cv_runs):
     assert model.data(model.index(1, 3, parent)) == "排除"
     assert model.data(model.index(1, 9, parent)) == "测试排除"
     colour = model.data(model.index(1, 9, parent), Qt.ForegroundRole)
-    assert colour is not None and colour == QColor("#a33")
+    assert colour is not None and colour == QColor(theme_color("error"))
 
     panel.deleteLater()
     app.processEvents()

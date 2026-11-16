@@ -1,15 +1,13 @@
-# CVAnalysis v2 性能优化规划（P0/P1 交接文档）
+# CVAnalysis v2 性能优化规划（P0/P1）
 
-> 面向后续接手的 LLM Agent / 开发者。本文是**规划文档**，不代表 P0/P1 已实现。
+> 2026-11-09：本文保留历史规划语境。主界面已移除“跟随勾选”：勾选决定新图范围，已建图保留各自数据快照；旧项目的选择仍按保存内容恢复。本文后续提及 follow 的内容不再描述当前行为，请以现行代码为准。
+> 本文的 144 等数字是 2026-10-25 历史基线，当前功能请参阅 [README](../README.md)。
+
+> 本文是**规划文档**，不代表 P0/P1 已实现。
 >
 > 当前基线：2026-10-25。`tests_v2` 144 项通过，1 条既有多 CV tight-layout 警告。当前代码已包含 CV/EIS/CP 分析、CP/GCD、手动坐标范围、分类快捷菜单等功能。
 >
 > **2026-10-31 进展情况**：按实际规模（500-cycle CV 约 10 万点；1h CP 2 万–30 万点）执行了 P0-lite，而没有启动完整 P0/P1。已实现：当前图选项只重绘当前 tab、隐藏 dirty tab 延迟补绘、论文自动图例列数缓存、CV 循环图例上限与范围合并（默认 10）、CP `completed_cp_series` 复用 summary segments、参数修改按 run 范围刷新并修复 CP 归一化 summary 失效。完整 `AnalysisCache`、四级刷新、通用重绘依赖图、异步保存仍未实现，当前规模下不建议启动。
->
-> 开始修改前请先读：
-> - 本地交接说明 `Vibe_Coding_Outline.md`（不纳入仓库）
-> - 内部实现日志 `docs/IMPLEMENTATION_LOG.md`（不纳入仓库）
-> - 本文
 >
 > 工作区保护：不要执行 `git clean`、`git reset --hard`，也不要用 Git 恢复已删除的旧版 GUI 文件。用户 `.cvproj`、`config.json`、测试数据和 PNG 属于工作区数据，除非用户明确要求，不要删除或覆盖。
 
@@ -625,9 +623,8 @@ python -m compileall -q cvanalysis tests_v2 start_gui.py
 
 ---
 
-## 14. 交接注意事项
+## 14. 开发注意事项
 
-- 先读本地交接说明 `Vibe_Coding_Outline.md`（不纳入仓库）的“关键不变量”和“容易踩的坑”。
 - 不要为了性能改变：
   - `PlotSpec.run_ids == []` 的语义（无选择，不是全部）
   - `cycle_selection` 的缺失/空列表语义
@@ -635,5 +632,4 @@ python -m compileall -q cvanalysis tests_v2 start_gui.py
   - CP `complete_holds` 与 `include_holds` 的语义
   - `axis_limits` 的 key 映射和空值=自动规则
   - 论文图例的列数/字号/bbox
-- 修改缓存/刷新后，必须更新本文和内部实现日志 `docs/IMPLEMENTATION_LOG.md`（不纳入仓库）。
-- 如果发现本文与代码冲突，以当前代码和最新实现日志为准，然后修正本文。
+- 如果发现本文与代码冲突，以当前代码为准，然后修正本文。

@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-import string
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator, Mapping
+
+from cvanalysis.plotting.template_format import DisplayValue, TemplateError, format_template, literal_fallback
 
 TEXT_CATEGORIES = ("axis", "title", "annotation", "legend")
 
@@ -19,7 +20,7 @@ _STRING_SAMPLES = {
     "model": "Rs-CPE",
     "x_term": "x",
     "y_term": "y",
-    "current": "1 mA",
+    "current": DisplayValue(1.0, "1 mA", " mA"),
 }
 
 _MISSING = object()
@@ -36,7 +37,8 @@ class TextField:
 
 
 def _axis(group: str, suffix: str, label: str, default: str, placeholders: tuple[str, ...] = ()) -> TextField:
-    return TextField(f"axis.{suffix}", "axis", group, label, default, placeholders)
+    return TextField(f"axis.{suffix}", "axis", group, label, default,
+                     tuple(dict.fromkeys((*placeholders, "unit"))))
 
 
 def _title(key: str, group: str, default: str, placeholders: tuple[str, ...] = ()) -> TextField:
@@ -63,6 +65,8 @@ _EIS_BODE = "EIS Bode"
 _EIS_FIT = "EIS 拟合"
 _CP_GCD = "CP / GCD"
 _CP_CAPACITY = "GCD 容量-循环"
+_LSV = "LSV 电流-电位"
+_IT = "I-T 电流-时间"
 
 
 TEXT_FIELDS: tuple[TextField, ...] = (
@@ -108,6 +112,14 @@ TEXT_FIELDS: tuple[TextField, ...] = (
     _axis(_CP_CAPACITY, "cp_capacity.x", "X 轴标签", "Cycle"),
     _axis(_CP_CAPACITY, "cp_capacity.y", "左轴 Y 标签", "Capacity ({unit})", ("unit",)),
     _axis(_CP_CAPACITY, "cp_capacity.efficiency_y", "右轴 Y 标签", "Coulombic efficiency (%)"),
+    _axis(_LSV, "lsv_curve.x", "X 轴标签", "Potential (V)"),
+    _axis(_LSV, "lsv_curve.y", "Y 轴标签", "Current ({unit})", ("unit",)),
+    _axis(_LSV, "lsv_curve.y_reference_area", "Y 轴标签（参考面积）", "Current density ({unit})", ("unit",)),
+    _axis(_LSV, "lsv_curve.y_reference_capacitance", "Y 轴标签（参考电容）", "Current / capacitance ({unit})", ("unit",)),
+    _axis(_IT, "it_curve.x", "X 轴标签", "Time (s)"),
+    _axis(_IT, "it_curve.y", "Y 轴标签", "Current ({unit})", ("unit",)),
+    _axis(_IT, "it_curve.y_reference_area", "Y 轴标签（参考面积）", "Current density ({unit})", ("unit",)),
+    _axis(_IT, "it_curve.y_reference_capacitance", "Y 轴标签（参考电容）", "Current / capacitance ({unit})", ("unit",)),
     _title("cv_overlay", _CV_OVERLAY, ""),
     _title("cv_cap_scan", _CV_CAP_SCAN, "Capacitance vs scan rate"),
     _title("cv_current_scan", _CV_CURRENT_SCAN, "Current at {target:g} V", ("target",)),
@@ -126,8 +138,8 @@ TEXT_FIELDS: tuple[TextField, ...] = (
     _annotation(_CV_OVERLAY, "cv_overlay.multi_runs", "多数据行数", "{runs} runs", ("runs",)),
     _annotation(_CV_OVERLAY, "cv_overlay.multi_cycles", "多数据循环数", "{cycles} cycles", ("cycles",)),
     _annotation(_CV_CAP_SCAN, "cv_cap_scan.equation_linear", "线性拟合方程", "C = {slope:.4g} v + {intercept:.4g} {unit}", ("slope", "intercept", "unit")),
-    _annotation(_CV_CAP_SCAN, "cv_cap_scan.equation_coordinate", "坐标直线拟合方程", "{y_term} = {slope:.4g}·{x_term} + {intercept:.4g}", ("y_term", "slope", "x_term", "intercept")),
-    _annotation(_CV_CAP_SCAN, "cv_cap_scan.equation_power", "幂律拟合方程", "C = {a:.4g} v^{n:.3f}", ("a", "n")),
+    _annotation(_CV_CAP_SCAN, "cv_cap_scan.equation_coordinate", "坐标直线拟合方程", "{y_term} = {slope:.4g}·{x_term} + {intercept:.4g}", ("y_term", "slope", "x_term", "intercept", "unit")),
+    _annotation(_CV_CAP_SCAN, "cv_cap_scan.equation_power", "幂律拟合方程", "C = {a:.4g} v^{n:.3f}", ("a", "n", "unit")),
     _annotation(_CV_CAP_SCAN, "cv_cap_scan.r2", "R² 行", "R² = {r2:.4f}", ("r2",)),
     _annotation(_CV_CAP_SCAN, "cv_cap_scan.compact_power", "紧凑幂律注释", "n={n:.2f}; R²={r2:.3f}", ("n", "r2")),
     _annotation(_CV_CAP_SCAN, "cv_cap_scan.compact_r2", "紧凑 R² 注释", "R²={r2:.3f}", ("r2",)),
@@ -212,41 +224,19 @@ TEXT_FIELD_MAP: dict[str, TextField] = {field.key: field for field in TEXT_FIELD
 
 
 def _sample_context(field: TextField) -> dict[str, Any]:
+    integers = {"n", "runs", "cycles", "cycle", "start", "end", "file_n", "cycle_n", "points"}
     return {
-        name: _STRING_SAMPLES.get(name, 1.0)
+        name: _STRING_SAMPLES.get(name, 1 if name in integers else 1.0)
         for name in field.placeholders
     }
 
 
 def safe_format(template: str, context: Mapping[str, Any]) -> str:
-    """Format known placeholders while preserving mathtext braces."""
+    """Format registered fields with bounded, non-executable syntax."""
     try:
-        parts = list(string.Formatter().parse(template))
-    except ValueError:
-        return template
-    output: list[str] = []
-    for literal, field_name, format_spec, conversion in parts:
-        output.append(literal)
-        if field_name is None:
-            continue
-        if field_name in context:
-            value: Any = context[field_name]
-            if conversion == "r":
-                value = repr(value)
-            elif conversion == "s":
-                value = str(value)
-            elif conversion == "a":
-                value = ascii(value)
-            output.append(format(value, format_spec or ""))
-            continue
-        token = "{" + field_name
-        if conversion:
-            token += "!" + conversion
-        if format_spec:
-            token += ":" + format_spec
-        token += "}"
-        output.append(token)
-    return "".join(output)
+        return format_template(template, context)
+    except TemplateError:
+        return literal_fallback(template)
 
 
 def validate_text_template(key: str, template: str) -> tuple[bool, str]:
@@ -258,10 +248,15 @@ def validate_text_template(key: str, template: str) -> tuple[bool, str]:
     if template == "" or template.strip() == "":
         return True, ""
     try:
-        safe_format(template, _sample_context(field))
+        format_template(template, _sample_context(field), strict=True)
     except (ValueError, KeyError) as exc:
         return False, str(exc)
     return True, ""
+
+
+def preview_text_template(key: str, template: str) -> str:
+    """Preview using the same types and formatter as validation."""
+    return format_template(template, _sample_context(TEXT_FIELD_MAP[key]), strict=True)
 
 
 def invalid_text_values(values: Mapping[str, Any] | None) -> list[str]:
@@ -394,6 +389,13 @@ def axis_text_key(
         return f"axis.eis_fit.{section}_{side}"
     if kind == "cp_gcd":
         return f"axis.cp_gcd.{side}" if side in {"x", "y"} else None
+    if kind in {"lsv_curve", "it_curve"}:
+        if (
+            side == "y"
+            and normalization in {"reference_area", "reference_capacitance"}
+        ):
+            return f"axis.{kind}.y_{normalization}"
+        return f"axis.{kind}.{side}" if side in {"x", "y"} else None
     if kind == "cp_capacity":
         if section == "efficiency":
             return "axis.cp_capacity.efficiency_y" if side == "y" else None
@@ -412,6 +414,34 @@ def compact_text_enabled(spec) -> bool:
     return width <= 85
 
 
+def _fixed_axis_unit(kind: str, section: str, side: str) -> str | None:
+    if kind in {"cv_overlay", "cv_contribution", "lsv_curve"} and side == "x":
+        return "V"
+    if kind in {"cv_cap_scan", "cv_current_scan", "cv_bvalue", "cv_contribution_vs_rate"} and side == "x":
+        return "V/s"
+    if kind == "cv_contribution_vs_rate" and side == "y":
+        return "%"
+    if kind == "cv_trasatti" and side == "x":
+        return "(V/s)^-1/2"
+    if kind in {"it_curve", "cp_gcd"} and side == "x":
+        return "s"
+    if kind == "cp_gcd" and side == "y":
+        return "V"
+    if kind == "cp_capacity":
+        if section == "efficiency" and side == "y":
+            return "%"
+        if side == "x":
+            return "Cycle"
+    if kind == "eis_bode":
+        if side == "x":
+            return "Hz"
+        if section == "phase" and side == "y":
+            return "°"
+    if kind == "eis_fit" and section == "residual" and side == "x":
+        return "Hz"
+    return None
+
+
 def axis_text(
     spec,
     section: str,
@@ -421,9 +451,12 @@ def axis_text(
     compact: bool | None = None,
     **context: Any,
 ) -> str:
+    fixed_unit = _fixed_axis_unit(getattr(spec, "kind", ""), section, side)
+    if "unit" not in context and fixed_unit is not None:
+        context["unit"] = fixed_unit
     override = axis_label_override(spec, section, side)
     if override is not None:
-        return override
+        return safe_format(override, context)
     mode = normalization if normalization is not None else getattr(spec, "normalization", "none")
     if compact is None:
         compact = compact_text_enabled(spec)
@@ -443,6 +476,9 @@ def default_axis_text(
     compact: bool | None = None,
     **context: Any,
 ) -> str:
+    fixed_unit = _fixed_axis_unit(getattr(spec, "kind", ""), section, side)
+    if "unit" not in context and fixed_unit is not None:
+        context["unit"] = fixed_unit
     mode = normalization if normalization is not None else getattr(spec, "normalization", "none")
     if compact is None:
         compact = compact_text_enabled(spec)

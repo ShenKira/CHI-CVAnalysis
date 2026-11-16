@@ -12,8 +12,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QItemSelectionModel, QModelIndex, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
+from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractButton,
     QAbstractItemView,
     QComboBox,
     QDialog,
@@ -39,9 +41,11 @@ from PySide6.QtWidgets import (
 )
 
 from cvanalysis.appearance import normalize_theme
+from cvanalysis.analysis.cp import CPRunSummary, analyze_cp_run
+from cvanalysis.analysis.cp_series import normalize_cp_concat_config
 from cvanalysis.analysis.eis import metrics_from_fit
 from cvanalysis.analysis.fitting import EISFitResult
-from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun, ElectrodeParams
+from cvanalysis.domain.models import CPRun, CVRun, Dataset, EISRun, SweepRun, ElectrodeParams, abbreviate_name
 from cvanalysis.domain.units import CURRENT, format_with_unit
 from cvanalysis.plotting.legend import (
     dataset_file_numbers,
@@ -49,7 +53,7 @@ from cvanalysis.plotting.legend import (
     preview_label,
     resolve_legend_labels,
 )
-from cvanalysis.plotting.presets import BUILTIN_PRESETS, DEFAULT_PRESET_NAME, preset_label, preset_names
+from cvanalysis.plotting.presets import BUILTIN_PRESETS, preset_label, preset_names, resolve_preset
 from cvanalysis.plotting.spec import PLOT_KINDS, PlotSpec
 from cvanalysis.services.dataset_service import (
     AnalysisSettings,
@@ -65,14 +69,17 @@ from cvanalysis.services.settings_service import (
     app_data_dir,
 )
 from cvanalysis.ui.dialogs.legend_dialog import LegendAliasDialog, LegendTemplateDialog
+from cvanalysis.ui.dialogs.cp_concat_dialog import CPConcatDialog
 from cvanalysis.ui.dialogs.plot_data_dialog import PlotDataDialog
 from cvanalysis.ui.dialogs.preset_manager_dialog import PresetManagerDialog
 from cvanalysis.ui.dialogs.quick_style_dialog import QuickStyleDialog
 from cvanalysis.ui.dialogs.settings_dialog import SettingsDialog
 from cvanalysis.ui.dialogs.style_dialog import StyleEditorDialog
+from cvanalysis.ui.layout import WorkspaceColumnAlignment, fit_dialog, initial_window_size
 from cvanalysis.ui.logging_utils import QtLogHandler, configure_logging
 from cvanalysis.ui.models.dataset_model import ALIAS_COLUMN, DatasetTreeModel
-from cvanalysis.ui.theme import apply_theme_role, application_stylesheet
+from cvanalysis.ui.theme import apply_button_role, apply_theme_role, application_stylesheet, theme_color
+from cvanalysis.ui.tokens import FONT_FAMILIES, UiTokens
 from cvanalysis.ui.widgets.analysis_panel import AnalysisPanel
 from cvanalysis.ui.widgets.plot_tab import PlotTab
 from cvanalysis.ui.widgets.view_columns import ViewColumns
@@ -80,6 +87,11 @@ from cvanalysis.ui.workers import ImportThread, TaskThread
 from cvanalysis.ui.widgets.analysis_options_panel import AnalysisOptionsPanel
 from cvanalysis.ui.widgets.results_panel import ResultsPanel
 from cvanalysis.ui.widgets.wheel_guard import install_wheel_guard
+from cvanalysis.ui.glass.surfaces import GlassBacking, MaterialManager, effective_mode
+from cvanalysis.ui.glass.controls import LiquidButtonGroups, LiquidComboRegistry, LiquidTabs, PointerLights
+from cvanalysis.ui.glass.popups import wrap_menu
+from cvanalysis.ui.glass.menubar import LiquidMenuBar
+from cvanalysis.ui.glass.tooltips import LiquidTooltipFilter
 
 
 BASE_WINDOW_TITLE = "CVAnalysis v2 — 电化学数据分析工作区"
@@ -98,8 +110,14 @@ def _safe_ui_scale(value) -> float:
 class MainWindow(QMainWindow):
     def __init__(self, *, settings_path: str | Path | None = None, parent=None):
         super().__init__(parent)
+        # A closed workspace owns many Qt effects, timers and popup views.
+        # Release the QObject tree after an accepted close instead of keeping
+        # hidden windows alive through signal and event-filter references.
+        self.setAttribute(Qt.WA_DeleteOnClose)
         self.settings_service = SettingsService(settings_path)
         self._project_analysis = None
+        self._project_styles = {}
+        self._project_active_preset = None
         self._dirty = False
         self._loading_project = False
         self._resetting_project = False
@@ -107,6 +125,10 @@ class MainWindow(QMainWindow):
         self._ui_theme = normalize_theme(
             self.settings_service.ui_state.get("theme", "default"),
             self.settings_service.theme_ids(),
+        )
+        self.glass_manager = MaterialManager(
+            self, effective_mode(self.settings_service.ui_state.get("material", "liquid_glass")),
+            self.settings_service.ui_state.get("animations", True),
         )
         self.dataset = Dataset()
         self.dataset_model = DatasetTreeModel(self)
@@ -131,7 +153,9 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_actions()
         self._connect_signals()
+        self._install_glass_controls()
         self._restore_ui_state()
+        self.column_alignment = WorkspaceColumnAlignment(self)
         ui = self.settings_service.ui_state
         if not ui.get("dataset_splitter"):
             QTimer.singleShot(0, self._apply_default_splitters)
@@ -170,11 +194,28 @@ class MainWindow(QMainWindow):
             return self._project_analysis
         return self.settings_service.analysis
 
+    def _available_plot_presets(self):
+        # A project carries a snapshot of its presets; it must not silently
+        # acquire different values from a same-named local user preset.
+        return {**self.settings_service.user_presets, **self._project_styles}
+
+    def _resolve_plot_style(self, name):
+        return resolve_preset(name, self._available_plot_presets())
+
+    def _set_active_plot_preset(self, name):
+        if name in self._project_styles and name not in preset_names(self.settings_service.user_presets):
+            self._project_active_preset = name
+        else:
+            self._project_active_preset = None
+            self.settings_service.set_active_preset(name)
+
     def _apply_ui_scale(self) -> None:
         app = QApplication.instance()
         if app is not None:
+            tokens = UiTokens.from_scale(self._ui_scale)
             font = app.font()
-            font.setPointSizeF(11.0 * self._ui_scale)
+            font.setFamilies(list(FONT_FAMILIES))
+            font.setPointSizeF(tokens.font_size_pt)
             app.setFont(font)
             app.setStyleSheet(
                 application_stylesheet(
@@ -186,23 +227,22 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle(BASE_WINDOW_TITLE)
-        self.setStyleSheet(
-            application_stylesheet(
-                self._ui_scale,
-                self._ui_theme,
-                themes_path=self.settings_service.theme_path,
-            )
-        )
-        self.resize(1560, 960)
+        self.setStyleSheet(self._window_stylesheet())
+        width, height = initial_window_size()
+        self.resize(width, height)
+        self.setMinimumSize(900, 600)
         self.setDockNestingEnabled(True)
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
+        self.tabs.setElideMode(Qt.ElideRight)
+        self.tabs.setUsesScrollButtons(True)
         self.setCentralWidget(self.tabs)
 
         self.tree = QTreeView()
+        self.tree.setProperty("structuralView", True)
         self.tree.setModel(self.dataset_model)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -225,7 +265,11 @@ class MainWindow(QMainWindow):
         tree_layout = QVBoxLayout(tree_widget)
         tree_layout.setContentsMargins(4, 4, 4, 4)
         tree_layout.setSpacing(4)
-        hint = QLabel("勾选更新跟随图；拖动文件调整分组内顺序。“数据...”自定义当前图；右键文件设置面积/图例模板/别名并快速绘图。")
+        hint = QLabel("勾选用于新建图；拖动文件可排序。")
+        hint.setToolTip(
+            "勾选文件/循环用于新建图；右键图表可自定义当前图数据；"
+            "右键文件可设置面积、图例模板、别名或快速绘图。"
+        )
         hint.setWordWrap(True)
         apply_theme_role(hint, "hint")
         tree_layout.addWidget(hint)
@@ -245,6 +289,10 @@ class MainWindow(QMainWindow):
         clear_all_btn.clicked.connect(self.clear_dataset)
         for button in (select_all_btn, clear_selection_btn, delete_selected_btn, clear_all_btn):
             action_row.addWidget(button)
+        apply_button_role(select_all_btn, "secondary")
+        apply_button_role(clear_selection_btn, "secondary")
+        apply_button_role(delete_selected_btn, "danger")
+        apply_button_role(clear_all_btn, "danger")
         tree_layout.addLayout(action_row)
         self.file_detail_label = QLabel("未选择文件")
         self.file_detail_label.setWordWrap(True)
@@ -269,9 +317,13 @@ class MainWindow(QMainWindow):
         self.analysis_dock.setObjectName("analysis_dock")
         self.analysis_dock.setWidget(self.analysis_panel)
         self.addDockWidget(Qt.RightDockWidgetArea, self.analysis_dock)
+        self.analysis_tooltip_filter = LiquidTooltipFilter(
+            self.analysis_panel, self.glass_manager, self
+        )
 
         self.results_panel = ResultsPanel()
         self.log_view = QPlainTextEdit()
+        self.log_view.setProperty("structuralView", True)
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(3000)
         self.log_title = QLabel("日志")
@@ -287,7 +339,13 @@ class MainWindow(QMainWindow):
         self.log_dock.setObjectName("log_dock")
         self.options_panel = AnalysisOptionsPanel()
         self.options_panel.applied.connect(self._on_analysis_options_applied)
-        self.options_panel.setMinimumWidth(450)
+        self.options_panel.detach_requested.connect(self._detach_options_panel)
+        self.options_panel.tab_bar_changed.connect(self._refresh_options_tab_bar)
+        self._options_dialog = None
+        self._options_shell = None
+        self._options_placeholder = None
+        self._options_saved_sizes = None
+        self.options_panel.setMinimumWidth(225)
         self.bottom_splitter = QSplitter(Qt.Horizontal)
         self.bottom_splitter.setChildrenCollapsible(False)
         self.bottom_splitter.addWidget(self.results_panel)
@@ -296,7 +354,7 @@ class MainWindow(QMainWindow):
         self.bottom_splitter.setStretchFactor(0, 0)
         self.bottom_splitter.setStretchFactor(1, 1)
         self.bottom_splitter.setStretchFactor(2, 0)
-        self.bottom_splitter.setSizes([430, 900, 520])
+        self.bottom_splitter.setSizes([400, 900, 460])
         self.log_dock.setWidget(self.bottom_splitter)
         self.log_dock.setTitleBarWidget(QWidget(self))
         self.log_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
@@ -305,14 +363,15 @@ class MainWindow(QMainWindow):
         self.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.log_dock)
         self.resizeDocks([self.dataset_dock, self.analysis_dock], [380, 380], Qt.Horizontal)
-        self.resizeDocks([self.log_dock], [400], Qt.Vertical)
+        bottom_height = max(220, min(320, int(self.height() * 0.30)))
+        self.resizeDocks([self.log_dock], [bottom_height], Qt.Vertical)
 
         self.preset_combo = QComboBox()
         self.preset_combo.setMinimumWidth(150)
         self.apply_preset_all_btn = QPushButton("应用到全部")
-        self.apply_preset_all_btn.setProperty("secondary", True)
-        self.edit_style_btn = QPushButton("编辑样式")
-        self.edit_style_btn.setProperty("secondary", True)
+        apply_button_role(self.apply_preset_all_btn, "secondary")
+        self.edit_style_btn = QPushButton("微调当前图")
+        apply_button_role(self.edit_style_btn, "secondary")
 
     def _build_actions(self) -> None:
         self.open_action = QAction("导入数据文件...", self)
@@ -355,6 +414,12 @@ class MainWindow(QMainWindow):
         self.settings_action.triggered.connect(self.open_settings)
         self.preset_manager_action = QAction("预设管理...", self)
         self.preset_manager_action.triggered.connect(self.open_preset_manager)
+        self.quick_style_action = QAction("微调当前图...", self)
+        self.quick_style_action.triggered.connect(self.edit_current_plot_style)
+        self.plot_data_action = QAction("当前图数据与图例...", self)
+        self.plot_data_action.triggered.connect(lambda: self._edit_plot_data(self._active_plot_tab()))
+        self.save_style_preset_action = QAction("保存当前样式为预设...", self)
+        self.save_style_preset_action.triggered.connect(self.edit_current_style)
         self.edit_legend_action = QAction("设置数据图例模板...", self)
         self.edit_legend_action.setToolTip("为选中数据设置默认图例模板，例如 {CV_Voltage}-{Cycle_Number}")
         self.edit_legend_action.triggered.connect(self._edit_legend_template_for_selection)
@@ -366,6 +431,10 @@ class MainWindow(QMainWindow):
 
         self.cv_overlay_action = QAction("CV 叠加图", self)
         self.cv_overlay_action.triggered.connect(lambda: self._request_plot("cv_overlay"))
+        self.lsv_action = QAction("LSV 电流-电位", self)
+        self.lsv_action.triggered.connect(lambda: self._request_plot("lsv_curve"))
+        self.it_action = QAction("I-T 电流-时间", self)
+        self.it_action.triggered.connect(lambda: self._request_plot("it_curve"))
         self.cv_cap_scan_action = QAction("电容-扫速", self)
         self.cv_cap_scan_action.triggered.connect(lambda: self._request_plot("cv_cap_scan"))
         self.cv_current_scan_action = QAction("固定电位电流-扫速", self)
@@ -390,6 +459,15 @@ class MainWindow(QMainWindow):
         self.cp_gcd_action.triggered.connect(lambda: self._request_plot("cp_gcd"))
         self.cp_capacity_action = QAction("GCD 容量-循环 + 库伦效率", self)
         self.cp_capacity_action.triggered.connect(lambda: self._request_plot("cp_capacity"))
+        self.cp_concat_existing_action = QAction("拼接已加载 CP 容量-循环", self)
+        self.cp_concat_existing_action.setToolTip(
+            "直接使用工作区中已选中或已勾选的多个 CP 数据创建拼接容量-循环图，不重新导入文件"
+        )
+        self.cp_concat_existing_action.setStatusTip(
+            "拼接至少需要 2 个 CP 数据"
+        )
+        self.cp_concat_existing_action.setEnabled(False)
+        self.cp_concat_existing_action.triggered.connect(self.concat_existing_cp)
         self.close_tab_action = QAction("关闭当前标签页", self)
         self.close_tab_action.setShortcut(QKeySequence("Ctrl+W"))
         self.close_tab_action.setShortcutContext(Qt.WindowShortcut)
@@ -412,15 +490,21 @@ class MainWindow(QMainWindow):
             self.cv_trasatti_action,
         )
         eis_actions = (self.eis_nyquist_action, self.eis_bode_action, self.eis_fit_action)
-        cp_actions = (self.cp_gcd_action, self.cp_capacity_action)
+        cp_actions = (
+            self.cp_gcd_action,
+            self.cp_capacity_action,
+            self.cp_concat_existing_action,
+        )
 
         def make_submenu(title: str, actions) -> QMenu:
             submenu = QMenu(title, self)
+            submenu.setToolTipsVisible(True)
             for action in actions:
                 submenu.addAction(action)
             return submenu
 
-        menu = self.menuBar()
+        menu = LiquidMenuBar(self, self.glass_manager)
+        self.setMenuBar(menu)
         file_menu = menu.addMenu("文件(&F)")
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.open_project_action)
@@ -438,6 +522,8 @@ class MainWindow(QMainWindow):
         analysis_menu.addMenu(make_submenu("CV 分析", cv_actions))
         analysis_menu.addMenu(make_submenu("EIS 分析", eis_actions))
         analysis_menu.addMenu(make_submenu("CP / GCD 分析", cp_actions))
+        analysis_menu.addAction(self.lsv_action)
+        analysis_menu.addAction(self.it_action)
 
         view_menu = menu.addMenu("视图(&V)")
         view_menu.addAction(self.dataset_dock.toggleViewAction())
@@ -449,6 +535,10 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.reset_layout_action)
 
         tools_menu = menu.addMenu("工具(&T)")
+        tools_menu.addAction(self.plot_data_action)
+        tools_menu.addAction(self.quick_style_action)
+        tools_menu.addAction(self.save_style_preset_action)
+        tools_menu.addSeparator()
         tools_menu.addAction(self.settings_action)
         tools_menu.addAction(self.preset_manager_action)
         tools_menu.addAction(self.edit_legend_action)
@@ -458,6 +548,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self.about_action)
 
         toolbar = QToolBar("主工具栏")
+        self.main_toolbar = toolbar
         toolbar.setObjectName("main_toolbar")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -482,6 +573,8 @@ class MainWindow(QMainWindow):
             button.setObjectName("quick_" + title.split()[0].lower())
             toolbar.addWidget(button)
             self.quick_analysis_buttons[title] = button
+        toolbar.addAction(self.lsv_action)
+        toolbar.addAction(self.it_action)
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("预设:"))
         toolbar.addWidget(self.preset_combo)
@@ -489,7 +582,104 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.edit_style_btn)
         toolbar.addSeparator()
         toolbar.addAction(self.export_action)
-        toolbar.addAction(self.clear_action)
+
+    def _window_stylesheet(self):
+        css = application_stylesheet(self._ui_scale, self._ui_theme,
+                                     themes_path=self.settings_service.theme_path)
+        if self.glass_manager.mode == "solid":
+            return css
+        tokens = UiTokens.from_scale(self._ui_scale)
+        return css + f"""
+            QComboBox[liquidControl="true"] {{ background: {theme_color('surface')};
+                border: 1px solid {theme_color('border_control')};
+                border-radius: {tokens.radius_md}px;
+                padding: 5px 28px 5px 9px; }}
+            QComboBox[liquidControl="true"]:hover {{ background: {theme_color('surface_alt')}; }}
+            QComboBox[liquidControl="true"]:focus {{ border: 2px solid {theme_color('focus')};
+                padding: 4px 27px 4px 8px; }}
+            QComboBox[liquidControl="true"]::drop-down {{ border: none; background: transparent; width: 25px; }}
+            QComboBox[liquidControl="true"]::down-arrow {{ image: none; width: 0px; height: 0px; }}
+            QMenuBar[liquidGlassMenuBar="true"] {{ background: transparent; border: none; }}
+            QToolBar[liquidDemoPanel="true"] {{ background: transparent; border: none; }}
+            QPushButton[liquidGroupMember="true"], QToolButton[liquidGroupMember="true"],
+            QComboBox[liquidGroupMember="true"],
+            QPushButton[liquidGroupMember="true"]:hover, QPushButton[liquidGroupMember="true"]:pressed,
+            QPushButton[liquidGroupMember="true"]:checked,
+            QToolButton[liquidGroupMember="true"]:hover, QToolButton[liquidGroupMember="true"]:pressed,
+            QToolButton[liquidGroupMember="true"]:checked, QComboBox[liquidGroupMember="true"]:hover,
+            QComboBox[liquidGroupMember="true"]:pressed {{ background: transparent; border-color: transparent; }}
+        """
+
+    def _install_glass_controls(self):
+        toolbar = self.main_toolbar
+        toolbar.setProperty("liquidDemoPanel", True)
+        backing = GlassBacking(toolbar, self.glass_manager, radius=12)
+        backing.setVisible(self.glass_manager.mode != "solid")
+        self.pointer_lights = PointerLights(self)
+        self.button_groups = LiquidButtonGroups(self, self.glass_manager.mode)
+        menu_bar = self.menuBar()
+        for action in list(menu_bar.actions()):
+            source = action.menu()
+            if source is not None:
+                menu_bar.removeAction(action)
+                menu_bar.addMenu(self._wrap_glass_menu(source, self))
+        self.button_groups.add([toolbar.widgetForAction(action) for action in
+                                (self.open_action, self.open_project_action, self.save_project_action)])
+        self.button_groups.add(list(self.quick_analysis_buttons.values()))
+        self.button_groups.add([self.preset_combo, self.apply_preset_all_btn, self.edit_style_btn])
+        buttons = self.dataset_dock.widget().findChildren(QAbstractButton, options=Qt.FindDirectChildrenOnly)
+        self.button_groups.add(buttons)
+        for index in (0, 1, 2, 3, 4):
+            page = self.analysis_panel.analysis_tabs.widget(index)
+            buttons = [button for button in page.findChildren(QPushButton, options=Qt.FindDirectChildrenOnly)
+                       if button.text() != "重置"]
+            self.button_groups.add(buttons, orientation="vertical")
+            if len(buttons) == 1:
+                buttons[0].setProperty("pill", True)
+                buttons[0].setProperty("liquidControl", True)
+                self.pointer_lights.attach(buttons[0])
+        controls = [child for child in toolbar.children() if isinstance(child, QToolButton)]
+        controls.append(self.results_panel.results_tabs.cornerWidget())
+        for control in controls:
+            if control is not None and not control.property("liquidGroupMember"):
+                control.setProperty("liquidControl", True)
+                self.pointer_lights.attach(control)
+        self.liquid_tab_bars = [
+            LiquidTabs(self.results_panel.results_tabs.tabBar(), self.glass_manager),
+            LiquidTabs(self.analysis_panel.analysis_tabs.tabBar(), self.glass_manager),
+            LiquidTabs(self.options_panel.pages.tabBar(), self.glass_manager),
+        ]
+        self.combo_registry = LiquidComboRegistry(self, self.glass_manager, self.pointer_lights,
+                                                  menu_wrapper=self._wrap_glass_menu)
+        self.button_groups.refresh_popups()
+        self._refresh_glass_settings()
+
+    def _wrap_glass_menu(self, source, owner):
+        result = wrap_menu(source, owner, self.glass_manager)
+        if hasattr(self, "button_groups"):
+            self.button_groups.schedule_popup_refresh()
+        return result
+
+    def _refresh_glass_settings(self):
+        mode = effective_mode(self.settings_service.ui_state.get("material", "liquid_glass"))
+        self.glass_manager.animations = bool(self.settings_service.ui_state.get("animations", True))
+        self.glass_manager.set_mode(mode)
+        self.pointer_lights.animations = self.glass_manager.animations
+        self.button_groups.animations = self.glass_manager.animations
+        self.pointer_lights.set_mode(mode)
+        self.button_groups.set_mode(mode)
+        for surface in self.glass_manager.surfaces:
+            if surface is not None:
+                surface.setVisible(mode != "solid")
+        for tabs in self.liquid_tab_bars:
+            if isValid(tabs) and isValid(tabs.bar):
+                tabs.reset()
+        self.setStyleSheet(self._window_stylesheet())
+        for index in range(self.tabs.count()):
+            tab = self.tabs.widget(index)
+            if isinstance(tab, PlotTab):
+                tab.liquid_toolbar.refresh_mode()
+        self.combo_registry.refresh()
 
     def _connect_signals(self) -> None:
         self.tabs.tabCloseRequested.connect(self._close_tab)
@@ -499,10 +689,16 @@ class MainWindow(QMainWindow):
         self.tree.selectionModel().selectionChanged.connect(self._on_tree_selection_changed)
         self.analysis_panel.plot_requested.connect(self._request_plot)
         self.analysis_panel.fit_requested.connect(self.fit_selected_eis)
+        self.analysis_panel.concat_existing_cp_requested.connect(
+            self.concat_existing_cp
+        )
         self.analysis_panel.options_changed.connect(self._on_options_changed)
+        self.options_panel.cp_concat_settings_requested.connect(
+            lambda: self._edit_cp_concat(self._active_plot_tab())
+        )
         self.preset_combo.currentIndexChanged.connect(self._on_toolbar_preset_changed)
         self.apply_preset_all_btn.clicked.connect(self._apply_preset_to_all)
-        self.edit_style_btn.clicked.connect(self.edit_current_style)
+        self.edit_style_btn.clicked.connect(self.edit_current_plot_style)
         self.log_handler.emitter.message.connect(self._append_log)
 
     # ------------------------------------------------------------------
@@ -521,6 +717,32 @@ class MainWindow(QMainWindow):
         self.settings_service.settings.setdefault("app", {})["last_directory"] = str(Path(paths[0]).parent)
         self.settings_service.save()
         self._start_import(paths)
+
+    def concat_existing_cp(self) -> None:
+        """Create a concatenated CP capacity plot from already-loaded data."""
+        runs = self._cp_runs_for_plot()
+        if not runs:
+            self.statusBar().showMessage(
+                "工作区没有可用的 CP 数据；请先导入 CP 文件", 5000
+            )
+            return
+        if len(runs) < 2:
+            self.statusBar().showMessage(
+                "拼接至少需要 2 个 CP 数据；请在左侧选中或勾选更多 CP 文件",
+                8000,
+            )
+            return
+        tab = self._create_concat_cp_tab(runs)
+        self._show_analysis_options(tab)
+        self.statusBar().showMessage(
+            f"已基于工作区中的 {len(runs)} 个 CP 数据创建拼接图", 8000
+        )
+        QTimer.singleShot(
+            0,
+            lambda tab=tab: (
+                self._edit_cp_concat(tab) if isValid(tab) else None
+            ),
+        )
 
     def _start_import(self, paths: list[str]) -> None:
         if self.import_thread is not None and self.import_thread.isRunning():
@@ -564,6 +786,9 @@ class MainWindow(QMainWindow):
             self.logger.warning("跳过 %s: %s", issue.path, issue.message)
         for warning in new_dataset.warnings:
             self.logger.warning("导入警告: %s", warning)
+        hold_runs = [(run, run.hold_description()) for run in new_dataset.cp_runs if run.hold_description()]
+        for run, details in hold_runs:
+            self.logger.info("%s：检测到保持段信息：%s", run.display_name, details)
         if new_dataset.is_empty:
             details = "\n".join(f"{issue.path.name}: {issue.message}" for issue in issues[:8])
             QMessageBox.warning(self, "没有数据", "选中的文件没有可用的 CV/EIS/CP 数据\n" + details)
@@ -616,18 +841,26 @@ class MainWindow(QMainWindow):
                 self._request_plot("eis_nyquist")
             if self.dataset.cp_runs:
                 self._request_plot("cp_gcd")
+            if self.dataset.lsv_runs:
+                self._request_plot("lsv_curve")
+            if self.dataset.it_runs:
+                self._request_plot("it_curve")
         else:
             self._prune_tab_specs()
             self._redraw_all_tabs()
         self.statusBar().showMessage(
             f"导入完成：{len(self.dataset.cv_runs)} 个 CV，"
-            f"{len(self.dataset.eis_runs)} 个 EIS，{len(self.dataset.cp_runs)} 个 CP"
+            f"{len(self.dataset.eis_runs)} 个 EIS，{len(self.dataset.cp_runs)} 个 CP，"
+            f"{len(self.dataset.lsv_runs)} 个 LSV，{len(self.dataset.it_runs)} 个 I-T"
+            + (f"；{len(hold_runs)} 个 CP 含保持段信息" if hold_runs else "")
         )
         self.logger.info(
-            "导入完成: %s 个 CV, %s 个 EIS, %s 个 CP",
+            "导入完成: %s 个 CV, %s 个 EIS, %s 个 CP, %s 个 LSV, %s 个 I-T",
             len(self.dataset.cv_runs),
             len(self.dataset.eis_runs),
             len(self.dataset.cp_runs),
+            len(self.dataset.lsv_runs),
+            len(self.dataset.it_runs),
         )
         self._mark_dirty()
         if issues or analysis_failures:
@@ -669,6 +902,7 @@ class MainWindow(QMainWindow):
             visible_run_ids=visible_ids,
         )
         self._update_plot_contexts()
+        self._update_cp_concat_actions()
 
     def clear_dataset(self) -> None:
         if self.dataset.is_empty:
@@ -734,7 +968,6 @@ class MainWindow(QMainWindow):
 
     def _on_dataset_visibility_changed(self, *args) -> None:
         self._on_tree_selection_changed()
-        self._sync_following_tabs()
         self._mark_dirty()
 
     def _on_dataset_order_changed(self) -> None:
@@ -745,6 +978,7 @@ class MainWindow(QMainWindow):
             if isinstance(tab, PlotTab):
                 selected = set(tab.spec.run_ids)
                 tab.spec.run_ids = [run_id for run_id in ordered_ids if run_id in selected]
+                self._update_plot_tab_label(tab)
         self._on_tree_selection_changed()
         self._redraw_all_tabs()
         self._mark_dirty()
@@ -764,46 +998,40 @@ class MainWindow(QMainWindow):
             selected_run_ids=selected,
             visible_run_ids=visible_ids,
         )
+        self._update_cp_concat_actions()
 
-    def _sync_following_tabs(self) -> None:
-        cv_visible = list(self.dataset_model.visible_run_ids("cv"))
-        eis_visible = list(self.dataset_model.visible_run_ids("eis"))
-        cp_visible = list(self.dataset_model.visible_run_ids("cp"))
-        cv_visible_set = set(cv_visible)
-        cv_cycles = {
-            run_id: list(cycles)
-            for run_id, cycles in self.dataset_model.cycle_selection.items()
-            if run_id in cv_visible_set
-        }
-        for index in range(self.tabs.count()):
-            tab = self.tabs.widget(index)
-            if not isinstance(tab, PlotTab) or not tab.spec.follow_dataset:
-                continue
-            if tab.spec.kind.startswith("cv_"):
-                if tab.spec.run_ids == cv_visible and tab.spec.cycle_selection == cv_cycles:
-                    continue
-                tab.spec.run_ids = list(cv_visible)
-                tab.spec.cycle_selection = {
-                    run_id: list(cycles) for run_id, cycles in cv_cycles.items()
-                }
-            elif tab.spec.kind.startswith("cp_"):
-                if tab.spec.run_ids == cp_visible:
-                    continue
-                tab.spec.run_ids = list(cp_visible)
-            else:
-                if tab.spec.run_ids == eis_visible:
-                    continue
-                tab.spec.run_ids = list(eis_visible)
-            tab.redraw()
+    def _update_cp_concat_actions(self) -> None:
+        """Enable direct concat only when the current tree scope has 2+ CP runs."""
+        runs = self._cp_runs_for_plot()
+        count = len(runs)
+        total = len(self.dataset.cp_runs)
+        enabled = count >= 2
+        if total == 0:
+            tooltip = "工作区尚未加载 CP 数据；请先用“导入数据文件”导入 CP 文件"
+        elif count < 2:
+            tooltip = (
+                f"当前选中/勾选 {count} 个 CP 数据；拼接至少需要 2 个"
+                f"（工作区共 {total} 个 CP 数据）"
+            )
+        else:
+            tooltip = (
+                f"使用当前选中/勾选的 {count} 个 CP 数据创建拼接容量-循环图，"
+                "不重新导入文件"
+            )
+        self.cp_concat_existing_action.setEnabled(enabled)
+        self.cp_concat_existing_action.setToolTip(tooltip)
+        self.cp_concat_existing_action.setStatusTip(tooltip)
+        self.analysis_panel.set_concat_existing_enabled(enabled, tooltip)
 
     def _update_file_details(self, selected_run_ids: list[str]) -> None:
         if not selected_run_ids:
             cv_count = len(self.dataset.cv_runs)
             eis_count = len(self.dataset.eis_runs)
             cp_count = len(self.dataset.cp_runs)
-            if cv_count or eis_count or cp_count:
+            lsv_count, it_count = len(self.dataset.lsv_runs), len(self.dataset.it_runs)
+            if cv_count or eis_count or cp_count or lsv_count or it_count:
                 self.file_detail_label.setText(
-                    f"已加载 {cv_count} 个 CV / {eis_count} 个 EIS / {cp_count} 个 CP 文件"
+                    f"已加载 {cv_count} CV / {eis_count} EIS / {cp_count} CP / {lsv_count} LSV / {it_count} I-T"
                 )
             else:
                 self.file_detail_label.setText("未选择文件")
@@ -836,8 +1064,10 @@ class MainWindow(QMainWindow):
                 lines.append(f"{len(run.freq)} 点")
         elif isinstance(run, CPRun):
             current_text = format_with_unit(run.applied_current_A, CURRENT, digits=3)
-            hold_text = "含保持段" if run.has_hold_data else "无保持段"
-            lines.append(f"CP · 电流 {current_text} · 窗口 {run.voltage_window or 0:.3g} V · {hold_text}")
+            hold_text = run.hold_description()
+            lines.append(f"CP · 电流 {current_text} · 窗口 {run.voltage_window or 0:.3g} V" + (f" · {hold_text}" if hold_text else ""))
+        elif isinstance(run, SweepRun):
+            lines.append(f"{run.kind.upper()} · {len(run.x)} 点")
         params = []
         if run.params.area_cm2:
             params.append(f"面积 {run.params.area_cm2:g} cm²")
@@ -909,6 +1139,9 @@ class MainWindow(QMainWindow):
                 index, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
             )
             self._request_plot("cp_gcd", run_ids=[run.run_id])
+        elif isinstance(run, SweepRun):
+            self.tree.selectionModel().select(index, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+            self._request_plot("lsv_curve" if run.kind == "lsv" else "it_curve", run_ids=[run.run_id])
 
     def _on_tree_context_menu(self, position) -> None:
         index = self.tree.indexAt(position)
@@ -924,11 +1157,22 @@ class MainWindow(QMainWindow):
         plot_action = menu.addAction("绘制 CV 叠加图")
         eis_action = menu.addAction("绘制 EIS Nyquist")
         cp_action = menu.addAction("绘制 CP / GCD 曲线")
+        lsv_action = menu.addAction("绘制 LSV 曲线")
+        it_action = menu.addAction("绘制 I-T 曲线")
         plot_action.setEnabled(any(isinstance(run, CVRun) for run in runs))
         eis_action.setEnabled(any(isinstance(run, EISRun) for run in runs))
         cp_action.setEnabled(any(isinstance(run, CPRun) for run in runs))
+        lsv_action.setEnabled(any(isinstance(run, SweepRun) and run.kind == "lsv" for run in runs))
+        it_action.setEnabled(any(isinstance(run, SweepRun) and run.kind == "it" for run in runs))
         remove_action = menu.addAction("删除选中数据")
-        action = menu.exec(self.tree.viewport().mapToGlobal(position))
+        menu = self._wrap_glass_menu(menu, self.tree.viewport())
+        try:
+            action = menu.exec(self.tree.viewport().mapToGlobal(position))
+        finally:
+            if isValid(menu):
+                menu.deleteLater()
+        if not isValid(self):
+            return
         if action == params_action:
             self._edit_params(run_ids)
         elif action == legend_action:
@@ -946,6 +1190,12 @@ class MainWindow(QMainWindow):
         elif action == cp_action:
             self._select_run_ids(run_ids)
             self._request_plot("cp_gcd", run_ids=run_ids)
+        elif action == lsv_action:
+            self._select_run_ids(run_ids)
+            self._request_plot("lsv_curve", run_ids=run_ids)
+        elif action == it_action:
+            self._select_run_ids(run_ids)
+            self._request_plot("it_curve", run_ids=run_ids)
         elif action == remove_action:
             self._remove_runs(run_ids)
 
@@ -1089,16 +1339,6 @@ class MainWindow(QMainWindow):
             + ("" if template else "（已恢复默认）")
         )
 
-    def _on_tab_follow_changed(self, tab: PlotTab, checked: bool) -> None:
-        if not isinstance(tab, PlotTab):
-            return
-        if checked:
-            self._sync_following_tabs()
-            self.statusBar().showMessage("当前图已跟随左侧数据集勾选")
-        else:
-            self.statusBar().showMessage("当前图已改为独立数据选择")
-        self._mark_dirty()
-
     def _edit_plot_data(self, tab: PlotTab) -> None:
         if not isinstance(tab, PlotTab):
             return
@@ -1113,30 +1353,24 @@ class MainWindow(QMainWindow):
             return
         run_ids = dialog.selected_run_ids()
         cycle_selection = dialog.cycle_selection()
-        was_following = tab.spec.follow_dataset
-        selection_changed = (
-            set(run_ids) != set(tab.spec.run_ids)
-            or cycle_selection != tab.spec.cycle_selection
-        )
         tab.spec.run_ids = run_ids
         tab.spec.cycle_selection = cycle_selection
         tab.spec.legend_templates = dialog.legend_templates()
-        if selection_changed:
-            tab.set_follow_dataset(False)
+        self._sync_cp_concat_spec(tab.spec)
         tab.update_context(
             self.dataset,
             fits=self.fits,
             metrics=self.metrics,
             color_config=self.settings_service.color_config,
-            user_presets=self.settings_service.user_presets,
+            user_presets=self._available_plot_presets(),
         )
+        self._update_plot_tab_label(tab)
         tab.redraw()
+        if self.options_panel.tab is tab:
+            self.options_panel.refresh_cp_concat_controls()
         self._update_file_details(self._selected_run_ids())
         self._mark_dirty()
-        suffix = "（已停止跟随勾选）" if selection_changed and was_following else ""
-        self.statusBar().showMessage(
-            f"当前图已选择 {len(tab.spec.run_ids)} 个数据{suffix}"
-        )
+        self.statusBar().showMessage(f"当前图已选择 {len(tab.spec.run_ids)} 个数据")
 
     def _remove_runs(self, run_ids: list[str]) -> None:
         if not run_ids:
@@ -1166,28 +1400,31 @@ class MainWindow(QMainWindow):
         if kind.startswith("cv_"):
             runs = self._cv_runs_for_plot(run_ids)
             if not runs:
-                QMessageBox.information(
-                    self,
-                    "没有可绘制的 CV 数据",
-                    "请先在左侧勾选 CV 数据，或右键选择具体文件",
+                self.statusBar().showMessage(
+                    "没有可绘制的 CV 数据；请先勾选或选中 CV 文件", 5000
                 )
                 return
         elif kind.startswith("cp_"):
             runs = self._cp_runs_for_plot(run_ids)
             if not runs:
-                QMessageBox.information(
-                    self,
-                    "没有可绘制的 CP 数据",
-                    "请先在左侧勾选 CP 数据，或右键选择具体文件",
+                self.statusBar().showMessage(
+                    "没有可绘制的 CP 数据；请先勾选或选中 CP 文件", 5000
+                )
+                return
+        elif kind in {"lsv_curve", "it_curve"}:
+            group = "lsv" if kind == "lsv_curve" else "it"
+            runs = self._runs_for_plot(self.dataset.lsv_runs if group == "lsv" else self.dataset.it_runs, run_ids, group)
+            if not runs:
+                self.statusBar().showMessage(
+                    f"没有可绘制的 {group.upper()} 数据；请先勾选或选中文件",
+                    5000,
                 )
                 return
         else:
             runs = self._eis_runs_for_plot(run_ids)
             if not runs:
-                QMessageBox.information(
-                    self,
-                    "没有可绘制的 EIS 数据",
-                    "请先在左侧勾选 EIS 数据，或右键选择具体文件",
+                self.statusBar().showMessage(
+                    "没有可绘制的 EIS 数据；请先勾选或选中 EIS 文件", 5000
                 )
                 return
         options = self.analysis_panel.options()
@@ -1209,12 +1446,11 @@ class MainWindow(QMainWindow):
             fit_enabled=bool(self.fits) and kind.startswith("eis_"),
             frequency_low=options["frequency_low"],
             frequency_high=options["frequency_high"],
-            preset=self.settings_service.active_preset,
+            preset=self._project_active_preset or self.settings_service.active_preset,
             renumber_cycles=options.get("renumber_cycles", False),
             show_legend=options.get("show_legend", True),
             show_axes=options.get("show_axes", True),
             annotations=options.get("annotations", True),
-            follow_dataset=run_ids is None,
             analysis_options=(
                 {
                     "complete_holds": bool(options.get("complete_holds", True)),
@@ -1224,12 +1460,261 @@ class MainWindow(QMainWindow):
                 else {}
             ),
         )
+        if kind in {"lsv_curve", "it_curve"}:
+            spec.analysis_options["unit_overrides"] = {"current": "auto"}
+            if kind == "it_curve":
+                spec.analysis_options["it_reference_current_unit"] = "axis"
+        if kind == "cp_capacity":
+            spec.analysis_options["cp_display_unit"] = "auto"
         tab = self._add_plot_tab(spec)
+        if kind in {"lsv_curve", "it_curve"}:
+            self.analysis_panel.analysis_tabs.setCurrentIndex(3 if kind == "lsv_curve" else 4)
         self._show_analysis_options(tab)
 
+    @staticmethod
+    def _cp_run_summary(run: CPRun) -> CPRunSummary:
+        return (
+            run.summary
+            if isinstance(run.summary, CPRunSummary)
+            else analyze_cp_run(run)
+        )
+
+    def _cp_summaries(self, runs) -> dict[str, CPRunSummary]:
+        return {
+            run.run_id: self._cp_run_summary(run)
+            for run in runs
+        }
+
+    def _create_concat_cp_tab(self, runs) -> PlotTab:
+        runs = list(runs)
+        options = self.analysis_panel.options()
+        summaries = self._cp_summaries(runs)
+        order, ranges = normalize_cp_concat_config(
+            runs,
+            summaries,
+            order=[run.run_id for run in runs],
+        )
+        spec = PlotSpec(
+            kind="cp_capacity",
+            run_ids=order,
+            normalization=options["normalization"],
+            target_voltage=options["target_voltage"],
+            selected_scan_rate=options["selected_scan_rate"],
+            fit_model=options["fit_model"],
+            preset=self._project_active_preset
+            or self.settings_service.active_preset,
+            renumber_cycles=options.get("renumber_cycles", False),
+            show_legend=options.get("show_legend", True),
+            show_axes=options.get("show_axes", True),
+            annotations=options.get("annotations", True),
+            analysis_options={
+                "complete_holds": bool(options.get("complete_holds", True)),
+                "include_holds": bool(options.get("include_holds", False)),
+                "cp_display_unit": "auto",
+                "cp_concat_enabled": True,
+                "cp_concat_order": order,
+                "cp_concat_ranges": ranges,
+                "cp_concat_cycle_mode": "sequential",
+            },
+        )
+        return self._add_plot_tab(spec)
+
+    def _sync_cp_concat_spec(self, spec: PlotSpec) -> None:
+        """Keep concatenation metadata consistent with the plotted CP runs."""
+        if spec.kind != "cp_capacity":
+            return
+        selected = set(spec.run_ids)
+        runs = [
+            run for run in self.dataset.cp_runs if run.run_id in selected
+        ]
+        summaries = self._cp_summaries(runs)
+        order, ranges = normalize_cp_concat_config(
+            runs,
+            summaries,
+            order=spec.analysis_options.get("cp_concat_order"),
+            ranges=spec.analysis_options.get("cp_concat_ranges"),
+        )
+        spec.analysis_options["cp_concat_order"] = order
+        spec.analysis_options["cp_concat_ranges"] = ranges
+        reference_run_id = spec.analysis_options.get(
+            "capacity_percent_reference_run_id"
+        )
+        if reference_run_id and reference_run_id not in selected:
+            spec.analysis_options["capacity_percent_reference_run_id"] = ""
+            spec.analysis_options["capacity_percent_reference_cycle"] = None
+
+    def _edit_cp_concat(self, tab=None):
+        tab = tab if tab is not None else self._active_plot_tab()
+        if not isinstance(tab, PlotTab) or tab.spec.kind != "cp_capacity":
+            self.statusBar().showMessage(
+                "请先打开一个 GCD 容量-循环图，再设置跨文件拼接", 5000
+            )
+            return
+        by_id = {run.run_id: run for run in self.dataset.cp_runs}
+        runs = [
+            by_id[run_id]
+            for run_id in tab.spec.run_ids
+            if run_id in by_id
+        ]
+        if not runs:
+            self.statusBar().showMessage(
+                "当前图没有可用于拼接的 CP 数据", 5000
+            )
+            return
+        dialog = CPConcatDialog(
+            runs,
+            order=tab.spec.analysis_options.get("cp_concat_order"),
+            ranges=tab.spec.analysis_options.get("cp_concat_ranges"),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        order = dialog.order()
+        ranges = dialog.ranges()
+        options = tab.spec.analysis_options
+        options["cp_concat_order"] = list(order)
+        options["cp_concat_ranges"] = {
+            run_id: dict(bounds) for run_id, bounds in ranges.items()
+        }
+        message = "CP 拼接设置已更新"
+        if options.get("capacity_percent_mode") == "unified":
+            reference_run_id = str(
+                options.get("capacity_percent_reference_run_id") or ""
+            )
+            reference_cycle = options.get(
+                "capacity_percent_reference_cycle"
+            )
+            if reference_run_id:
+                reference_run = by_id.get(reference_run_id)
+                bounds = ranges.get(reference_run_id)
+                if reference_run is None or bounds is None:
+                    options["capacity_percent_reference_run_id"] = ""
+                    options["capacity_percent_reference_cycle"] = None
+                    message = (
+                        "统一 100% 参考文件已不在当前图中，参考设置已清除"
+                    )
+                else:
+                    try:
+                        cycle_index = int(reference_cycle)
+                    except (TypeError, ValueError, OverflowError):
+                        cycle_index = None
+                    if (
+                        cycle_index is None
+                        or not bounds["start"] <= cycle_index <= bounds["end"]
+                    ):
+                        summary = self._cp_run_summary(reference_run)
+                        first = next(
+                            (
+                                cycle.index
+                                for cycle in summary.cycles
+                                if bounds["start"]
+                                <= cycle.index
+                                <= bounds["end"]
+                            ),
+                            None,
+                        )
+                        options["capacity_percent_reference_cycle"] = first
+                        if first is not None:
+                            message = (
+                                "统一 100% 参考循环已调整为新范围内"
+                                "的第一个循环"
+                            )
+                        else:
+                            message = (
+                                "统一 100% 参考文件在新范围内没有循环，"
+                                "参考循环已清除"
+                            )
+        tab.redraw()
+        if self.options_panel.tab is tab:
+            self.options_panel.refresh_cp_concat_controls()
+            concat_checkbox = self.options_panel.controls.get(
+                "cp_concat_enabled"
+            )
+            if concat_checkbox is not None and not concat_checkbox.isChecked():
+                concat_checkbox.setChecked(True)
+        self._mark_dirty()
+        if message.startswith("统一"):
+            self.statusBar().showMessage(message, 8000)
+        else:
+            self.statusBar().showMessage(message)
+
     def _show_analysis_options(self, tab):
-        self.options_panel.bind(tab)
+        self._bind_options_panel(tab)
         self.log_dock.show()
+
+    def _detach_options_panel(self):
+        if self._options_dialog is not None:
+            self._options_dialog.raise_()
+            self._options_dialog.activateWindow()
+            return
+        self._options_saved_sizes = self.bottom_splitter.sizes()
+        placeholder = QWidget()
+        placeholder.setMinimumWidth(self.options_panel.minimumWidth())
+        layout = QVBoxLayout(placeholder)
+        hint = QLabel("当前图选项已在独立窗口中打开")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        back = QPushButton("返回工作区")
+        back.setProperty("secondary", True)
+        layout.addWidget(back)
+        layout.addStretch(1)
+        self.bottom_splitter.replaceWidget(2, placeholder)
+        self._options_placeholder = placeholder
+        dialog = self._options_shell
+        if dialog is None:
+            dialog = QDialog(self, Qt.Window)
+            dialog.setWindowTitle("当前图选项")
+            fit_dialog(dialog, 620, 720, min_width=400, min_height=350)
+            dialog_layout = QVBoxLayout(dialog)
+            dialog_layout.setContentsMargins(0, 0, 0, 0)
+            dialog.finished.connect(self._restore_options_panel)
+            self._options_shell = dialog
+        dialog_layout = dialog.layout()
+        dialog_layout.addWidget(self.options_panel)
+        self.options_panel.show()
+        self._options_dialog = dialog
+        back.clicked.connect(dialog.close)
+        dialog.show()
+        self._refresh_options_tab_bar()
+        QTimer.singleShot(0, lambda: self._refresh_options_tab_bar() if isValid(self) else None)
+
+    def _refresh_options_tab_bar(self):
+        if not isValid(self.options_panel):
+            return
+        bar = self.options_panel.pages.tabBar()
+        self.options_panel.refresh_detach_tab_bar()
+        previous = self.liquid_tab_bars[2]
+        if not isValid(previous) or not isValid(previous.bar) or previous.bar is not bar:
+            if isValid(previous):
+                previous.animation.stop()
+                previous.deleteLater()
+            self.liquid_tab_bars[2] = LiquidTabs(bar, self.glass_manager)
+        self.combo_registry.watch(self.options_panel)
+
+    def _restore_options_panel(self, *_):
+        dialog = self._options_dialog
+        if dialog is None:
+            return
+        self._options_dialog = None
+        dialog.layout().removeWidget(self.options_panel)
+        placeholder = self.bottom_splitter.replaceWidget(2, self.options_panel)
+        self.options_panel.show()
+        if placeholder is not None:
+            placeholder.deleteLater()
+        self._options_placeholder = None
+        if self._options_saved_sizes:
+            self.bottom_splitter.setSizes(self._options_saved_sizes)
+        self._options_saved_sizes = None
+        self._refresh_options_tab_bar()
+        QTimer.singleShot(0, lambda: self._refresh_options_tab_bar() if isValid(self) else None)
+
+    def _bind_options_panel(self, tab):
+        self.options_panel.bind(tab)
+        registry = getattr(self, "combo_registry", None)
+        if registry is not None:
+            # bind() rebuilds some fields synchronously; register them after
+            # construction rather than waiting for a later ChildAdded scan.
+            registry.watch(self.options_panel)
 
     def _on_analysis_options_applied(self, tab):
         options = {
@@ -1250,26 +1735,26 @@ class MainWindow(QMainWindow):
         self.analysis_panel.set_options(options)
         self._mark_dirty()
 
-    def _cv_runs_for_plot(self, run_ids: list[str] | None = None) -> list[CVRun]:
+    def _runs_for_plot(self, all_runs, run_ids: list[str] | None, kind: str):
         if run_ids is not None:
             selected = set(run_ids)
-            return [run for run in self.dataset.cv_runs if run.run_id in selected]
-        visible = set(self.dataset_model.visible_run_ids("cv"))
-        return [run for run in self.dataset.cv_runs if run.run_id in visible]
+            return [run for run in all_runs if run.run_id in selected]
+        selected_rows = set(self._selected_run_ids())
+        if selected_rows:
+            selected = [run for run in all_runs if run.run_id in selected_rows]
+            if selected:
+                return selected
+        visible = set(self.dataset_model.visible_run_ids(kind))
+        return [run for run in all_runs if run.run_id in visible]
+
+    def _cv_runs_for_plot(self, run_ids: list[str] | None = None) -> list[CVRun]:
+        return self._runs_for_plot(self.dataset.cv_runs, run_ids, "cv")
 
     def _eis_runs_for_plot(self, run_ids: list[str] | None = None) -> list[EISRun]:
-        if run_ids is not None:
-            selected = set(run_ids)
-            return [run for run in self.dataset.eis_runs if run.run_id in selected]
-        visible = set(self.dataset_model.visible_run_ids("eis"))
-        return [run for run in self.dataset.eis_runs if run.run_id in visible]
+        return self._runs_for_plot(self.dataset.eis_runs, run_ids, "eis")
 
     def _cp_runs_for_plot(self, run_ids: list[str] | None = None) -> list[CPRun]:
-        if run_ids is not None:
-            selected = set(run_ids)
-            return [run for run in self.dataset.cp_runs if run.run_id in selected]
-        visible = set(self.dataset_model.visible_run_ids("cp"))
-        return [run for run in self.dataset.cp_runs if run.run_id in visible]
+        return self._runs_for_plot(self.dataset.cp_runs, run_ids, "cp")
 
     def _eis_runs_for_fit(self) -> list[EISRun]:
         selected = [run for run in self.dataset.eis_runs if run.run_id in set(self._selected_run_ids())]
@@ -1278,7 +1763,7 @@ class MainWindow(QMainWindow):
         return self._eis_runs_for_plot()
 
     def _add_plot_tab(self, spec: PlotSpec) -> PlotTab:
-        style = self.settings_service.resolve_style(spec.preset)
+        style = self._resolve_plot_style(spec.preset)
         tab = PlotTab(
             spec,
             style,
@@ -1286,24 +1771,47 @@ class MainWindow(QMainWindow):
             fits=self.fits,
             metrics=self.metrics,
             color_config=self.settings_service.color_config,
-            user_presets=self.settings_service.user_presets,
+            user_presets=self._available_plot_presets(),
             text_values=self.settings_service.resolve_text_preset(),
+            glass_manager=self.glass_manager,
         )
         tab.message.connect(self.statusBar().showMessage)
         tab.rendered.connect(self._on_plot_rendered)
         tab.preset_changed.connect(self._on_tab_preset_changed)
         tab.data_requested.connect(self._edit_plot_data)
-        tab.follow_changed.connect(self._on_tab_follow_changed)
-        tab.options_requested.connect(self._show_analysis_options)
         tab.plot_changed.connect(lambda *_: self._mark_dirty())
-        index = self.tabs.addTab(tab, spec.label)
-        self.tabs.setTabToolTip(index, spec.label)
+        index = self.tabs.addTab(tab, self._plot_tab_title(spec))
+        self.tabs.setTabToolTip(index, self._plot_tab_tooltip(spec))
         self.tabs.setCurrentIndex(index)
         self._update_tab_actions()
         self._update_plot_contexts()
         self._refresh_preset_combo()
         self._mark_dirty()
         return tab
+
+    def _update_plot_tab_label(self, tab: PlotTab) -> None:
+        index = self.tabs.indexOf(tab)
+        if index >= 0:
+            self.tabs.setTabText(index, self._plot_tab_title(tab.spec))
+            self.tabs.setTabToolTip(index, self._plot_tab_tooltip(tab.spec))
+
+    def _plot_tab_title(self, spec: PlotSpec) -> str:
+        runs = [self.dataset.find_run(run_id) for run_id in spec.run_ids]
+        runs = [run for run in runs if run is not None]
+        if len(runs) == 1:
+            return f"{spec.label} · {abbreviate_name(runs[0].display_short_name, 22)}"
+        if runs:
+            first = abbreviate_name(runs[0].display_short_name, 16)
+            return f"{spec.label} · {first} +{len(runs) - 1}"
+        return spec.label
+
+    def _plot_tab_tooltip(self, spec: PlotSpec) -> str:
+        runs = [self.dataset.find_run(run_id) for run_id in spec.run_ids]
+        names = [run.display_name for run in runs if run is not None]
+        if not names:
+            return spec.label
+        visible = "；".join(names[:8])
+        return f"{spec.label}\n{visible}" + (" …" if len(names) > 8 else "")
 
     def _active_plot_tab(self) -> PlotTab | None:
         widget = self.tabs.currentWidget()
@@ -1312,11 +1820,22 @@ class MainWindow(QMainWindow):
     def _on_plot_rendered(self, tab: PlotTab) -> None:
         if tab is self._active_plot_tab():
             self.options_panel.refresh_axis_scale_labels()
+            if self.options_panel.tab is tab:
+                self.options_panel.refresh_axis_units()
+                self.options_panel.refresh_unit_choices()
+                self.options_panel.refresh_dynamic_units()
+                registry = getattr(self, "combo_registry", None)
+                if registry is not None:
+                    # Unit/concatenation combos are recreated during redraw;
+                    # install their opaque popup skin before the next open.
+                    registry.watch(self.options_panel)
 
     def _close_tab(self, index: int) -> None:
         widget = self.tabs.widget(index)
+        was_active = widget is not None and widget is self._active_plot_tab()
         self.tabs.removeTab(index)
-        self.options_panel.bind(self._active_plot_tab())
+        if was_active:
+            self._bind_options_panel(self._active_plot_tab())
         if isinstance(widget, PlotTab) and widget in self._pending_redraw_tabs:
             self._pending_redraw_tabs.remove(widget)
         if widget is not None:
@@ -1333,7 +1852,7 @@ class MainWindow(QMainWindow):
             self._close_tab(index)
 
     def _close_all_tabs_silent(self) -> None:
-        self.options_panel.bind(None)
+        self._bind_options_panel(None)
         self._pending_redraw_tabs.clear()
         previous = self.tabs.blockSignals(True)
         try:
@@ -1349,6 +1868,7 @@ class MainWindow(QMainWindow):
     def _update_tab_actions(self) -> None:
         self.close_tab_action.setEnabled(self._active_plot_tab() is not None)
         self.close_plots_action.setEnabled(self.tabs.count() > 0)
+        self.plot_data_action.setEnabled(self._active_plot_tab() is not None)
 
     def close_all_plots(self) -> None:
         had_tabs = self.tabs.count() > 0
@@ -1357,7 +1877,7 @@ class MainWindow(QMainWindow):
             self._mark_dirty()
 
     def _on_tab_changed(self, index: int) -> None:
-        self.options_panel.bind(self._active_plot_tab())
+        self._bind_options_panel(self._active_plot_tab())
         self._update_tab_actions()
         tab = self.tabs.widget(index)
         if not isinstance(tab, PlotTab):
@@ -1389,7 +1909,7 @@ class MainWindow(QMainWindow):
             fits=self.fits,
             metrics=self.metrics,
             color_config=self.settings_service.color_config,
-            user_presets=self.settings_service.user_presets,
+            user_presets=self._available_plot_presets(),
             text_values=self.settings_service.resolve_text_preset(),
         )
 
@@ -1456,6 +1976,11 @@ class MainWindow(QMainWindow):
                 for run_id, template in tab.spec.legend_templates.items()
                 if run_id in valid
             }
+            self._sync_cp_concat_spec(tab.spec)
+            self._update_plot_tab_label(tab)
+        active = self._active_plot_tab()
+        if active is not None and self.options_panel.tab is active:
+            self.options_panel.refresh_cp_concat_controls()
 
     def _on_options_changed(self) -> None:
         tab = self._active_plot_tab()
@@ -1539,7 +2064,7 @@ class MainWindow(QMainWindow):
                 fit_enabled=True,
                 frequency_low=options["frequency_low"],
                 frequency_high=options["frequency_high"],
-                preset=self.settings_service.active_preset,
+                preset=self._project_active_preset or self.settings_service.active_preset,
             )
             self._add_plot_tab(spec)
         else:
@@ -1547,6 +2072,7 @@ class MainWindow(QMainWindow):
             fit_tab.spec.normalization = options["normalization"]
             fit_tab.spec.frequency_low = options["frequency_low"]
             fit_tab.spec.frequency_high = options["frequency_high"]
+            self._update_plot_tab_label(fit_tab)
             fit_tab.redraw()
             self.tabs.setCurrentWidget(fit_tab)
         for index in range(self.tabs.count()):
@@ -1564,53 +2090,60 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _refresh_preset_combo(self) -> None:
         self.preset_combo.blockSignals(True)
-        current = self.settings_service.active_preset
+        current = self._project_active_preset or self.settings_service.active_preset
         tab = self._active_plot_tab()
         if tab is not None:
             current = tab.spec.preset
         self.preset_combo.clear()
-        for name in preset_names(self.settings_service.user_presets):
-            self.preset_combo.addItem(preset_label(name, self.settings_service.user_presets), name)
+        presets = self._available_plot_presets()
+        for name in preset_names(presets):
+            label = preset_label(name, presets)
+            self.preset_combo.addItem(label, name)
+            self.preset_combo.setItemData(self.preset_combo.count() - 1, label, Qt.ToolTipRole)
         index = self.preset_combo.findData(current)
         if index >= 0:
             self.preset_combo.setCurrentIndex(index)
+        self.preset_combo.setToolTip(preset_label(current, presets))
         self.preset_combo.blockSignals(False)
 
     def _on_toolbar_preset_changed(self, index: int) -> None:
         name = self.preset_combo.itemData(index)
         if not name:
             return
-        style = self.settings_service.resolve_style(name)
+        self.preset_combo.setToolTip(preset_label(name, self._available_plot_presets()))
+        style = self._resolve_plot_style(name)
         tab = self._active_plot_tab()
-        self.settings_service.set_active_preset(name)
+        self._set_active_plot_preset(name)
         if tab is not None:
-            tab.set_style(style)
-            self._maybe_quick_edit_style(tab, name)
+            tab.set_style(style, clear_overrides=False)
             self._mark_dirty()
         applied_name = tab.spec.preset if tab is not None else name
         self.statusBar().showMessage(
-            f"已应用预设: {preset_label(applied_name, self.settings_service.user_presets)}"
+            f"已应用预设: {preset_label(applied_name, self._available_plot_presets())}"
         )
 
     def _on_tab_preset_changed(self, tab: PlotTab, name: str) -> None:
-        style = self.settings_service.resolve_style(name)
-        tab.set_style(style)
-        self.settings_service.set_active_preset(name)
-        self._maybe_quick_edit_style(tab, name)
+        style = self._resolve_plot_style(name)
+        tab.set_style(style, clear_overrides=False)
+        self._set_active_plot_preset(name)
         self._refresh_preset_combo()
         self._mark_dirty()
         self.statusBar().showMessage(
-            f"已应用预设: {preset_label(tab.spec.preset, self.settings_service.user_presets)}"
+            f"已应用预设: {preset_label(tab.spec.preset, self._available_plot_presets())}"
         )
 
-    def _maybe_quick_edit_style(self, tab: PlotTab, name: str) -> None:
-        """Open a compact per-plot style editor for non-default presets."""
-        if name == DEFAULT_PRESET_NAME:
+    def edit_current_plot_style(self) -> None:
+        """Open the non-destructive quick editor for the active plot only."""
+        tab = self._active_plot_tab()
+        if tab is None:
+            self.statusBar().showMessage("请先打开一个图")
             return
+        seed_style = tab.base_style.with_overrides(tab.spec.overrides)
         dialog = QuickStyleDialog(
-            tab.style,
-            preset_label(name, self.settings_service.user_presets),
+            seed_style,
+            preset_label(tab.spec.preset, self._available_plot_presets()),
             self,
+            base_style=tab.base_style,
         )
         if hasattr(dialog, "set_plot_flags"):
             dialog.set_plot_flags(tab.spec.show_legend, tab.spec.annotations)
@@ -1629,9 +2162,9 @@ class MainWindow(QMainWindow):
 
     def _save_quick_overrides(self, tab: PlotTab, overrides: dict, dialog: QuickStyleDialog) -> None:
         self._apply_quick_overrides(tab, overrides)
-        style = tab.style
+        style = tab.base_style.with_overrides(tab.spec.overrides)
         current_name = tab.spec.preset
-        current_label = preset_label(current_name, self.settings_service.user_presets)
+        current_label = preset_label(current_name, self._available_plot_presets())
         user_presets = self.settings_service.user_presets
 
         box = QMessageBox(self)
@@ -1687,6 +2220,8 @@ class MainWindow(QMainWindow):
             self.settings_service.save_preset(saved_name, style, saved_name)
 
         saved_style = self.settings_service.resolve_style(saved_name)
+        if saved_name in self._project_styles:
+            self._project_styles[saved_name] = {**self._project_styles[saved_name], **saved_style.to_dict()}
         tab.set_style(saved_style, clear_overrides=True)
         self._refresh_preset_combo()
         self.settings_service.set_active_preset(saved_name)
@@ -1698,16 +2233,12 @@ class MainWindow(QMainWindow):
         name = self.preset_combo.currentData()
         if not name:
             return
-        style = self.settings_service.resolve_style(name)
-        active_tab = self._active_plot_tab()
-        overrides = dict(active_tab.spec.overrides) if active_tab is not None else {}
+        style = self._resolve_plot_style(name)
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             if isinstance(tab, PlotTab):
-                tab.set_style(style)
-                if overrides:
-                    tab.apply_overrides(overrides)
-        self.settings_service.set_active_preset(name)
+                tab.set_style(style, clear_overrides=False)
+        self._set_active_plot_preset(name)
         if self.tabs.count():
             self._mark_dirty()
         self.statusBar().showMessage("预设已应用到全部图表")
@@ -1730,6 +2261,8 @@ class MainWindow(QMainWindow):
         name = name.strip()
         edited.name = name
         self.settings_service.save_preset(name, edited, name)
+        if name in self._project_styles:
+            self._project_styles[name] = {**self._project_styles[name], **edited.to_dict()}
         self._refresh_preset_combo()
         for index in range(self.tabs.count()):
             widget = self.tabs.widget(index)
@@ -1765,6 +2298,8 @@ class MainWindow(QMainWindow):
     # Settings / project / export
     # ------------------------------------------------------------------
     def open_settings(self) -> None:
+        previous = {key: dict(self.settings_service.settings.get(key, {}))
+                    for key in ("analysis", "eis", "colors")}
         dialog = SettingsDialog(
             self.settings_service.settings,
             self,
@@ -1772,7 +2307,11 @@ class MainWindow(QMainWindow):
         )
         if dialog.exec() == QDialog.Accepted:
             values = dialog.values()
-            self._project_analysis = None
+            scientific_changed = any(previous[section].get(key) != value
+                                     for section in previous
+                                     for key, value in values.get(section, {}).items())
+            if scientific_changed:
+                self._project_analysis = None
             self.settings_service.settings["analysis"] = {
                 **self.settings_service.settings.get("analysis", {}),
                 **values["analysis"],
@@ -1795,27 +2334,22 @@ class MainWindow(QMainWindow):
                 self.settings_service.theme_ids(),
             )
             self._apply_ui_scale()
-            self.setStyleSheet(
-                application_stylesheet(
-                    self._ui_scale,
-                    self._ui_theme,
-                    themes_path=self.settings_service.theme_path,
-                )
-            )
+            self._refresh_glass_settings()
             self.tree.viewport().update()
-            self.results_panel.update_dataset(
-                self.dataset,
-                selected_run_ids=self._selected_run_ids(),
-                visible_run_ids=self.dataset_model.visible_run_ids(),
-            )
             self.settings_service.save()
-            self.analysis_panel.set_options(
-                {
-                    "normalization": self.active_analysis.get("default_normalization", "none"),
-                    "fit_model": self.settings_service.eis.get("fit_model", "auto"),
-                }
-            )
-            if not self.dataset.is_empty:
+            if scientific_changed:
+                self.results_panel.update_dataset(
+                    self.dataset,
+                    selected_run_ids=self._selected_run_ids(),
+                    visible_run_ids=self.dataset_model.visible_run_ids(),
+                )
+                self.analysis_panel.set_options(
+                    {
+                        "normalization": self.active_analysis.get("default_normalization", "none"),
+                        "fit_model": self.settings_service.eis.get("fit_model", "auto"),
+                    }
+                )
+            if scientific_changed and not self.dataset.is_empty:
                 refresh_analysis(
                     self.dataset,
                     AnalysisSettings(
@@ -1889,7 +2423,9 @@ class MainWindow(QMainWindow):
                 active_plot=max(0, self.tabs.currentIndex()),
                 analysis_settings=self.active_analysis,
                 fits=self.fits,
-                styles={name: self.settings_service.resolve_style(name).to_dict() for name in {spec.preset for spec in specs}},
+                styles={**copy.deepcopy(self._project_styles),
+                        **{name: self._resolve_plot_style(name).to_dict()
+                           for name in {spec.preset for spec in specs} if name not in self._project_styles}},
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "保存失败", str(exc))
@@ -1934,6 +2470,8 @@ class MainWindow(QMainWindow):
             self.fits = {}
             self.metrics = {}
             self._project_analysis = None
+            self._project_styles = {}
+            self._project_active_preset = None
             self.dataset_model.set_dataset(
                 self.dataset,
                 {},
@@ -1984,6 +2522,14 @@ class MainWindow(QMainWindow):
         self._loading_project = True
         try:
             self._project_analysis = state.analysis_settings or None
+            self._project_styles = ({key: copy.deepcopy(value) for key, value in state.styles.items()
+                                     if isinstance(key, str) and isinstance(value, dict)}
+                                    if isinstance(state.styles, dict) else {})
+            self._project_active_preset = None
+            if state.plots:
+                active = state.plots[max(0, min(state.active_plot, len(state.plots) - 1))].preset
+                if active in self._project_styles and active not in preset_names(self.settings_service.user_presets):
+                    self._project_active_preset = active
             if state.warnings:
                 self.logger.warning("项目加载警告: %s", "; ".join(state.warnings))
                 QMessageBox.warning(self, "项目加载警告", "\n".join(state.warnings[:10]))
@@ -2006,10 +2552,9 @@ class MainWindow(QMainWindow):
             )
             self.tree.expandAll()
             for spec in state.plots:
-                if spec.preset in state.styles:
-                    spec.overrides = {**state.styles[spec.preset], **spec.overrides}
+                if spec.preset in self._project_styles:
+                    spec.overrides = {**self._project_styles[spec.preset], **spec.overrides}
                 self._add_plot_tab(spec)
-            self._sync_following_tabs()
             if state.active_plot < self.tabs.count():
                 self.tabs.setCurrentIndex(state.active_plot)
             visible_ids = self.dataset_model.visible_run_ids()
@@ -2132,6 +2677,9 @@ class MainWindow(QMainWindow):
         self._restore_splitter_sizes(ui)
         self.log_dock.setFloating(False)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.log_dock)
+        dock_widths = ui.get("dock_widths")
+        if isinstance(dock_widths, dict):
+            QTimer.singleShot(0, lambda: self._apply_dock_widths(dock_widths))
         if ui.get("bottom_layout_version") != BOTTOM_LAYOUT_VERSION:
             QTimer.singleShot(0, self._reset_bottom_layout)
         widths = ui.get("column_widths", {})
@@ -2139,20 +2687,45 @@ class MainWindow(QMainWindow):
             for key, columns in self._column_views().items():
                 columns.restore(widths.get(key))
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not getattr(self, "_initial_show_checked", False):
+            self._initial_show_checked = True
+            QTimer.singleShot(0, self._ensure_window_visible)
+
+    def _apply_dock_widths(self, widths: dict) -> None:
+        try:
+            dataset_width = int(widths.get("dataset", self.dataset_dock.width()))
+            analysis_width = int(widths.get("analysis", self.analysis_dock.width()))
+        except (TypeError, ValueError):
+            return
+        dataset_width = max(180, min(600, dataset_width))
+        analysis_width = max(280, min(600, analysis_width))
+        self.resizeDocks(
+            [self.dataset_dock, self.analysis_dock],
+            [dataset_width, analysis_width],
+            Qt.Horizontal,
+        )
+
     def _ensure_window_visible(self) -> None:
         screens = QApplication.screens()
         if not screens:
             return
         frame = self.geometry()
-        for screen in screens:
-            available = screen.availableGeometry()
-            overlap = frame.intersected(available)
-            if overlap.width() >= 80 and overlap.height() >= 60:
-                return
         primary = QApplication.primaryScreen() or screens[0]
         available = primary.availableGeometry()
-        width = min(max(480, frame.width()), available.width())
-        height = min(max(320, frame.height()), available.height())
+        for screen in screens:
+            candidate = screen.availableGeometry()
+            overlap = frame.intersected(candidate)
+            if (
+                frame.width() <= candidate.width()
+                and frame.height() <= candidate.height()
+                and overlap.width() >= 240
+                and overlap.height() >= 180
+            ):
+                return
+        width = min(max(900, frame.width()), available.width())
+        height = min(max(600, frame.height()), available.height())
         self.resize(width, height)
         self.move(
             available.x() + max(0, (available.width() - width) // 2),
@@ -2198,6 +2771,10 @@ class MainWindow(QMainWindow):
             ui["dataset_splitter"] = list(self.dataset_splitter.sizes())
             ui["analysis_splitter"] = None
             ui["bottom_splitter"] = list(self.bottom_splitter.sizes())
+            ui["dock_widths"] = {
+                "dataset": self.dataset_dock.width(),
+                "analysis": self.analysis_dock.width(),
+            }
             ui["bottom_layout_version"] = BOTTOM_LAYOUT_VERSION
             ui["column_widths"] = {key: columns.widths() for key, columns in self._column_views().items()}
             self.settings_service.save()
@@ -2222,8 +2799,9 @@ class MainWindow(QMainWindow):
 
     def _reset_bottom_layout(self):
         self.log_dock.show()
-        self.resizeDocks([self.log_dock], [400], Qt.Vertical)
-        right = 520
+        bottom_height = max(220, min(320, int(self.height() * 0.30)))
+        self.resizeDocks([self.log_dock], [bottom_height], Qt.Vertical)
+        right = 460
         left_total = max(600, self.width() - right)
         results = max(330, min(int(left_total * 0.36), max(330, left_total - 260)))
         log = max(260, left_total - results)
@@ -2274,5 +2852,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_changes("退出"):
             event.ignore()
             return
+        if self._options_dialog is not None:
+            self._options_dialog.close()
         self._save_ui_state()
         super().closeEvent(event)

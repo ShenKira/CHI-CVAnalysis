@@ -6,11 +6,11 @@ REM ---------------------------------------------------------------------------
 REM CVAnalysis v2 build script
 REM
 REM Usage:
-REM   build.bat                    -> build StandAlone + OneFile for 2.0.2
-REM   build.bat 2.0.2              -> build another version
-REM   build.bat 2.0.2 all          -> build StandAlone + OneFile
-REM   build.bat 2.0.2 standalone   -> build StandAlone only
-REM   build.bat 2.0.2 onefile      -> build OneFile only
+REM   build.bat                    -> build StandAlone + OneFile for 2.1.0
+REM   build.bat 2.1.0              -> build another version
+REM   build.bat 2.1.0 all          -> build StandAlone + OneFile
+REM   build.bat 2.1.0 standalone   -> build StandAlone only
+REM   build.bat 2.1.0 onefile      -> build OneFile only
 REM
 REM Optional:
 REM   set CVANALYSIS_PYTHON=C:\path\to\env\python.exe
@@ -23,7 +23,7 @@ REM ---------------------------------------------------------------------------
 cd /d "%~dp0"
 
 set "APP_VERSION=%~1"
-if "%APP_VERSION%"=="" set "APP_VERSION=2.0.2"
+if "%APP_VERSION%"=="" set "APP_VERSION=2.1.0"
 set "APP_VERSION=%APP_VERSION: =%"
 if /i "%APP_VERSION:~0,1%"=="v" set "APP_VERSION=%APP_VERSION:~1%"
 
@@ -40,6 +40,12 @@ if /i "%BUILD_MODE%"=="onefile" goto :build_mode_ok
 echo [ERROR] Build mode must be all, standalone, or onefile.
 exit /b 1
 :build_mode_ok
+
+set "APP_ICON=%~dp0cvanalysis\resources\icons\cvanalysis.ico"
+if not exist "%APP_ICON%" (
+    echo [ERROR] Application icon missing: %APP_ICON%
+    exit /b 1
+)
 
 set "BUILD_CACHE=%~dp0build_cache"
 set "ONEFILE_OUTPUT_DIR=%~dp0CVAnalysis_OneFile_v%APP_VERSION%"
@@ -99,8 +105,9 @@ if errorlevel 1 (
 
 REM Use MSVC and version resources. Avoid compression/UPX-style heuristics in
 REM the OneFile payload; the StandAlone folder remains the safer deployment.
-set "COMMON_OPTIONS=--enable-plugin=pyside6 --include-package=cvanalysis --include-data-files=cvanalysis/default_themes.json=cvanalysis/default_themes.json --include-module=socket --nofollow-import-to=pandas.tests --nofollow-import-to=scipy.tests --nofollow-import-to=matplotlib.tests --windows-console-mode=disable --assume-yes-for-downloads --msvc=latest --lto=no --company-name=CVAnalysis --product-name=CVAnalysis --file-description="CVAnalysis electrochemical data analysis" --file-version=%APP_VERSION% --product-version=%APP_VERSION% --copyright="CVAnalysis contributors""
+set "COMMON_OPTIONS=--enable-plugin=pyside6 --include-package=cvanalysis --include-data-files=cvanalysis/default_themes.json=cvanalysis/default_themes.json --include-data-files=cvanalysis/ui/glass/PyGlass-LICENSE=cvanalysis/ui/glass/PyGlass-LICENSE --include-data-files=cvanalysis/ui/glass/PyGlass-NOTICE.md=cvanalysis/ui/glass/PyGlass-NOTICE.md --include-module=socket --nofollow-import-to=pandas.tests --nofollow-import-to=scipy.tests --nofollow-import-to=matplotlib.tests --windows-console-mode=disable --assume-yes-for-downloads --msvc=latest --lto=no --company-name=CVAnalysis --product-name=CVAnalysis --file-description="CVAnalysis electrochemical data analysis" --file-version=%APP_VERSION% --product-version=%APP_VERSION% --copyright="CVAnalysis contributors""
 set "DLL_CACHE_OPTION="
+set "COMMON_OPTIONS=%COMMON_OPTIONS% --windows-icon-from-ico="%APP_ICON%" --include-data-files=cvanalysis/resources/icons/cvanalysis.ico=cvanalysis/resources/icons/cvanalysis.ico"
 if /i "%CVANALYSIS_FORCE_DLL_CACHE%"=="1" set "DLL_CACHE_OPTION=--force-dll-dependency-cache-update"
 
 if /i not "%BUILD_MODE%"=="onefile" (

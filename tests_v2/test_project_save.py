@@ -151,7 +151,8 @@ def test_dirty_marker_and_close_prompt(tmp_path, synthetic_cv_runs, monkeypatch)
     with patch.object(QMessageBox, "question", return_value=QMessageBox.Discard):
         window.close()
     app.processEvents()
-    assert not window.isVisible()
+    from shiboken6 import isValid
+    assert not isValid(window) or not window.isVisible()
 
 
 def test_open_project_warns_before_discarding_changes(tmp_path, synthetic_cv_runs, monkeypatch):
