@@ -89,6 +89,11 @@ def test_close_last_tab_disables_action_but_keeps_project(tmp_path, synthetic_cv
     assert not window.close_tab_action.isEnabled()
     assert not window.close_plots_action.isEnabled()
     assert not window.dataset.is_empty
+    # Repeating close with no active tab must be harmless, without building
+    # another full workspace just to exercise this already-reached state.
+    window._close_current_tab()
+    app.processEvents()
+    assert window.tabs.count() == 0
     window.close()
     app.processEvents()
 
@@ -107,17 +112,5 @@ def test_ctrl_w_closes_canvas_tab_without_closing_window(tmp_path, synthetic_cv_
     assert window.tabs.count() == 1
     assert window.isVisible()
     assert not window.dataset.is_empty
-    window.close()
-    app.processEvents()
-
-
-def test_close_tab_when_no_tabs_is_a_noop(tmp_path, synthetic_cv_runs):
-    app, window = _make_window(tmp_path, synthetic_cv_runs, tabs=1)
-    window._close_all_tabs_silent()
-    app.processEvents()
-    assert window.tabs.count() == 0
-    window._close_current_tab()
-    app.processEvents()
-    assert window.tabs.count() == 0
     window.close()
     app.processEvents()

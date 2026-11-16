@@ -14,7 +14,7 @@ from cvanalysis.plotting.texts import safe_format, validate_text_template
 
 
 @pytest.mark.parametrize('spec,expected', [('.2f', '1.20'), ('.3e', '1.200e+00'),
-                                            ('.4g', '1.200'), ('.2f', '1.20')])
+                                            ('.4g', '1.200'), ('.2F', '1.20')])
 def test_numeric_format_retains_zeros(spec, expected):
     assert format_template('{value:' + spec + '}', {'value': 1.2}) == expected
 
@@ -54,6 +54,25 @@ def test_malicious_or_resource_exhausting_templates_are_rejected(template, tmp_p
     with pytest.raises(TemplateError):
         format_template(template, {'x': 1.2}, strict=True)
     assert not sentinel.exists()
+
+
+@pytest.mark.parametrize('template,context', [
+    ('{x:129f}', {'x': 1.2}),
+    ('{x:.13f}', {'x': 1.2}),
+    ('{x}' * 129, {'x': 1}),
+    ('{x}' * 128, {'x': 'a' * 129}),
+    (r'$\input{secret}$', {}),
+    (r'$\write18{command}$', {}),
+])
+def test_security_boundaries_reject_without_evaluation(template, context):
+    with pytest.raises(TemplateError):
+        format_template(template, context, strict=True)
+
+
+def test_safe_resource_boundaries_remain_usable():
+    assert len(format_template('{x:128f}', {'x': 1.2}, strict=True)) == 128
+    assert format_template('{x:.12f}', {'x': 1.2}, strict=True) == '1.200000000000'
+    assert format_template('{x}' * 128, {'x': 'a' * 128}, strict=True) == 'a' * 16384
 
 
 def test_untrusted_format_method_is_never_called():

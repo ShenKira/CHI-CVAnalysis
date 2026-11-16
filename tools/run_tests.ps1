@@ -22,7 +22,10 @@ Keep the basetemp even when all tests pass.
 Additional pytest arguments, for example: -PytestArgs @('-k','legend').
 
 .PARAMETER Suite
-All tests, GUI-focused tests, or plotting/text tests. The default is All.
+All tests, GUI-focused tests, plotting/text tests, or release checks.
+
+.PARAMETER Targets
+Explicit pytest files or node IDs. Replaces the preset Suite targets.
 
 .PARAMETER Durations
 Show the slowest N tests; zero disables the duration report.
@@ -37,8 +40,9 @@ Show the slowest N tests; zero disables the duration report.
 param(
     [string]$Python = 'python',
     [switch]$KeepTemp,
-    [ValidateSet('All', 'Gui', 'Plotting')]
+    [ValidateSet('All', 'Gui', 'Plotting', 'Release')]
     [string]$Suite = 'All',
+    [string[]]$Targets = @(),
     [ValidateRange(0, 1000)]
     [int]$Durations = 0,
     [string[]]$PytestArgs = @()
@@ -54,6 +58,11 @@ $cacheDir = Join-Path $testRoot ('cache_' + $runId)
 foreach ($argument in $PytestArgs) {
     if ($argument -match '^--basetemp(?:=|$)' -or $argument -match 'cache_dir\s*=') {
         throw 'Do not override basetemp or cache_dir; this script isolates both for each run.'
+    }
+}
+foreach ($target in $Targets) {
+    if ([string]::IsNullOrWhiteSpace($target) -or $target.StartsWith('-')) {
+        throw 'Targets accepts test paths or node IDs; put options in PytestArgs.'
     }
 }
 New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
@@ -109,7 +118,7 @@ try {
     Write-Host "[INFO] Suite     : $Suite"
     Write-Host ''
 
-    $targets = switch ($Suite) {
+    $suiteTargets = if ($Targets.Count -gt 0) { $Targets } else { switch ($Suite) {
         'Gui' { @('tests_v2/test_design_system.py', 'tests_v2/test_liquid_glass.py',
                   'tests_v2/test_application_icon.py',
                   'tests_v2/test_dialog_consistency.py',
@@ -125,8 +134,10 @@ try {
                        'tests_v2/test_safe_template_format.py', 'tests_v2/test_text_presets.py',
                        'tests_v2/test_it_reference_layout.py', 'tests_v2/test_it_y_reference.py',
                        'tests_v2/test_sweep_reference_display.py', 'tests_v2/test_plot_unit_safety.py') }
+        'Release' { @('tests_v2/test_release_contract.py', 'tests_v2/test_application_icon.py') }
         default { @('tests_v2') }
-    }
+    } }
+    Write-Host "[INFO] Targets   : $($suiteTargets -join ', ')"
     $pytestCommand = @(
         '-m', 'pytest',
         '-q',
@@ -134,7 +145,7 @@ try {
         '-o', "cache_dir=$cacheDir",
         '--basetemp', $base,
         '--tb=short'
-    ) + $targets + $PytestArgs
+    ) + $suiteTargets + $PytestArgs
     if ($Durations -gt 0) { $pytestCommand += "--durations=$Durations" }
 
     & $Python @pytestCommand

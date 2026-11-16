@@ -25,10 +25,22 @@
 ```powershell
 .\tools\run_tests.ps1 -Suite Gui
 .\tools\run_tests.ps1 -Suite Plotting
+.\tools\run_tests.ps1 -Suite Release
 .\tools\run_tests.ps1 -Suite All -Durations 10
 ```
 
-`Gui` 和 `Plotting` 是便于快速反馈的固定子集，不替代完整 `All`；需要更精确范围时继续用 `-PytestArgs`。`-Durations N` 列出最慢的 N 个测试，帮助定位性能回归。
+`Gui` 和 `Plotting` 是便于快速反馈的固定子集，不替代完整 `All`；需要更精确范围时用 `-Targets` 或 `-PytestArgs @('-k','表达式')`。`-Durations N` 列出最慢的 N 个测试，帮助定位性能回归。
+
+`Release` 检查版本元数据、真实 wheel 中的主题/图标/许可及应用图标；不替代 EXE 构建和启动验证。
+
+指定文件或单个用例时使用 `-Targets`，它替换预设组，避免将文件路径附加在全套目录后意外运行所有测试：
+
+```powershell
+.\tools\run_tests.ps1 -Targets @('tests_v2/test_safe_template_format.py')
+.\tools\run_tests.ps1 -Targets @('tests_v2/test_tab_close.py::test_close_last_tab_disables_action_but_keeps_project')
+```
+
+`-PytestArgs` 用于 `-k`、`-m` 等额外选项。覆盖策略、Qt 隔离和性能记录见 [测试指南](../docs/TESTING.md)。
 
 传入额外 pytest 参数：
 
