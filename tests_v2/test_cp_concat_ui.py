@@ -338,9 +338,11 @@ def test_cp_concat_dialog_accept_preserves_other_unapplied_inputs(
         app.processEvents()
 
 
-def test_cp_concat_refresh_drops_removed_reference_run(
-    synthetic_cp_run, tmp_path
+def test_cp_concat_keeps_hidden_reference_until_run_is_deleted(
+    synthetic_cp_run, tmp_path, monkeypatch
 ):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
     from cvanalysis.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
@@ -369,14 +371,23 @@ def test_cp_concat_refresh_drops_removed_reference_run(
         tab = window._add_plot_tab(spec)
         window._show_analysis_options(tab)
         panel = window.options_panel
-        tab.spec.run_ids = [first.run_id]
-        window._sync_cp_concat_spec(tab.spec)
-        panel.refresh_cp_concat_controls()
+        model = window.dataset_model
+        index = model.index_for_run(second.run_id)
+        assert model.setData(index, Qt.Unchecked, Qt.CheckStateRole)
         combo = panel.controls["capacity_percent_reference_run_id"]
+        assert combo.currentText().startswith("（未勾选）")
+        panel.apply()
+        assert spec.analysis_options["capacity_percent_reference_run_id"] == second.run_id
+        assert second.run_id in spec.analysis_options["cp_concat_ranges"]
+        assert model.setData(index, Qt.Checked, Qt.CheckStateRole)
+        assert combo.currentData() == second.run_id
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+        window._remove_runs([second.run_id])
         assert [
             combo.itemData(index) for index in range(combo.count())
         ] == [first.run_id]
         assert spec.analysis_options["capacity_percent_reference_run_id"] == ""
+        assert second.run_id not in spec.analysis_options["cp_concat_ranges"]
     finally:
         window._mark_clean()
         window.close()

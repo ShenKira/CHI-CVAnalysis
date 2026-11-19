@@ -255,7 +255,9 @@ def test_inspector_bar_width_takes_effect(synthetic_cv_runs):
             break
         QTest.qWait(20)
     assert spec.analysis_options["bar_width"] == 0.4
-    assert tab.figure.axes[0].patches[0].get_width() == 0.4
+    capacitive, diffusive = tab.figure.axes[0].containers[:2]
+    assert capacitive[0].get_x() == diffusive[0].get_x()
+    assert diffusive[0].get_width() == pytest.approx(0.4)
     dialog.deleteLater()
     tab.deleteLater()
     app.processEvents()

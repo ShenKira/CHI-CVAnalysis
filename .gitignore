@@ -17,6 +17,7 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Local temp files (never commit secrets or backups)
 *.log
@@ -74,6 +75,7 @@ Thumbs.db
 /build/
 /dist/
 *.egg-info/
+*.whl
 *.zip
 *.7z
 *.tar
@@ -81,6 +83,9 @@ Thumbs.db
 *.pdb
 *.dmp
 nuitka-crash-report.xml
+/SHA256SUMS.txt
+*.orig
+*.rej
 .coverage
 .coverage.*
 htmlcov/

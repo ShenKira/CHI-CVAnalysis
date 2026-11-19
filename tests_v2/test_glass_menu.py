@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from xml.etree import ElementTree
 from types import SimpleNamespace
 import matplotlib as mpl
 import pytest
@@ -278,6 +279,22 @@ def test_menu_does_not_change_scientific_svg(tab):
     menu.close()
     menu.deleteLater()
     assert before == render()
+
+
+def test_copy_vector_action_places_svg_on_clipboard(tab, app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "critical", lambda _, title, detail: pytest.fail(detail))
+    clipboard = app.clipboard()
+    menu = tab._build_context_menu()
+    try:
+        _action(menu, "复制当前矢量图").trigger()
+        root = ElementTree.fromstring(bytes(clipboard.mimeData().data("image/svg+xml")))
+        assert root.tag == "{http://www.w3.org/2000/svg}svg"
+        assert root.find(".//{http://www.w3.org/2000/svg}path") is not None
+    finally:
+        clipboard.clear()
+        menu.deleteLater()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows settings API")

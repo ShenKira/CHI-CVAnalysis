@@ -80,7 +80,7 @@ class ResultsPanel(QWidget):
 
         self.eis_table = _ResultTreeView()
         self.eis_model = MetricTreeModel(
-            ["文件", "Rs", "Rct", "f0", "Cdl", "相位@1Hz", "低频 |Z|", "备注"]
+            ["文件", "Rs", "Rct", "实测峰频", "Cdl", "相位@1Hz", "低频 |Z|", "备注"]
         )
         self.eis_table.setModel(self.eis_model)
         self.eis_model.numeric_columns = {1, 2, 3, 4, 5, 6}
@@ -419,7 +419,12 @@ class ResultsPanel(QWidget):
         eis_colors = {}
         for row_index, run in enumerate(eis_runs):
             metrics = run.summary if isinstance(run.summary, EISMetrics) else None
-            remark = "；".join(metrics.warnings[:1]) if metrics and metrics.warnings else ""
+            warning = metrics.warnings[0] if metrics and metrics.warnings else ""
+            source = ""
+            if metrics and metrics.fit_model and metrics.fit_frequency_range_hz:
+                low, high = metrics.fit_frequency_range_hz
+                source = f"{metrics.fit_model} · {low:g}–{high:g} Hz"
+            remark = "；".join(filter(None, (source, warning)))
             row = [
                 run.display_name,
                 format_with_unit(metrics.rs_ohm if metrics else None, IMPEDANCE, digits=4),
@@ -438,7 +443,7 @@ class ResultsPanel(QWidget):
             ]
             eis_rows.append(row)
             eis_run_ids.append(run.run_id)
-            if remark:
+            if warning:
                 eis_colors[(row_index, 7)] = theme_color("error")
 
         cp_rows = []
@@ -505,7 +510,7 @@ class ResultsPanel(QWidget):
                 cycle_ir_drop = (
                     f"{cycle.ir_drop_V:.3g} V" if self._finite(cycle.ir_drop_V) else "—"
                 )
-                child_remark = getattr(cycle, "warning", None) or ""
+                child_remark = cycle.cycle_warning
                 child_rows.append(
                     [
                         f"Cycle {cycle.index}",

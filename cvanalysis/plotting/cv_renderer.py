@@ -10,7 +10,6 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from cvanalysis.analysis.cv import (
-    BValueResult,
     CVRunSummary,
     ScanRatePoint,
     analyze_cv_run,
@@ -35,7 +34,6 @@ from cvanalysis.domain.units import (
     choose_unit_for_values,
     current_family,
     normalize_capacitance,
-    normalize_charge,
     normalize_current,
     resolve_unit,
     unit_factor,
@@ -70,35 +68,9 @@ def _option_float(options: dict, key: str, default: float, low: float, high: flo
 _CJK_FONT_CACHE: list[str] | None = None
 
 
-def _cjk_fonts() -> list[str]:
-    global _CJK_FONT_CACHE
-    if _CJK_FONT_CACHE is not None:
-        return _CJK_FONT_CACHE
-    from matplotlib import font_manager
-
-    available = {font.name for font in font_manager.fontManager.ttflist}
-    candidates = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Arial Unicode MS", "DejaVu Sans"]
-    _CJK_FONT_CACHE = [name for name in candidates if name in available] or ["DejaVu Sans"]
-    return _CJK_FONT_CACHE
-
-
-def _message(figure: Figure, style: PlotStyle, text: str, *, color: str = "#888888") -> None:
+def _empty_plot(figure: Figure) -> None:
     figure.clear()
-    ax = figure.add_subplot(111)
-    ax.text(
-        0.5,
-        0.5,
-        text,
-        transform=ax.transAxes,
-        ha="center",
-        va="center",
-        fontsize=max(10, style.font_size),
-        color=color,
-        fontfamily=_cjk_fonts(),
-        wrap=True,
-    )
-    ax.set_axis_off()
-    style.apply(figure)
+    figure.add_subplot(111).set_axis_off()
 
 
 def _selected_cycles(run: CVRun, spec: PlotSpec) -> list:
@@ -373,7 +345,7 @@ def draw_cv_overlay(
 ) -> list[str]:
     runs = _selected_cv_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CV 数据")
+        _empty_plot(figure)
         return ["没有选择 CV 数据"]
     _ensure_summaries(runs)
     warnings: list[str] = []
@@ -635,18 +607,6 @@ def draw_cv_overlay(
                 ),
             ]
             _annotate(ax, style, "\n".join(line for line in lines if line))
-    if warnings:
-        ax.text(
-            0.02,
-            0.98,
-            "\n".join(warnings[:3]),
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=max(8, style.annotation_size - 1),
-            color="#a33",
-            fontfamily=_cjk_fonts(),
-        )
     _finish(figure, style, spec)
     return warnings
 
@@ -691,7 +651,7 @@ def draw_cap_scan(
 ) -> list[str]:
     runs = _selected_cv_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CV 数据")
+        _empty_plot(figure)
         return ["没有选择 CV 数据"]
     _ensure_summaries(runs)
     warnings: list[str] = []
@@ -713,7 +673,7 @@ def draw_cap_scan(
         if value is not None and np.isfinite(value) and value > 0
     ]
     if not usable:
-        _message(figure, style, "没有可用于电容-扫速曲线的数据")
+        _empty_plot(figure)
         return warnings + ["没有可用于电容-扫速曲线的数据"]
 
     rates = np.asarray([point.scan_rate for point, _, _ in usable], dtype=float)
@@ -867,8 +827,6 @@ def draw_cap_scan(
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
-    if warnings:
-        ax.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax.transAxes, ha="left", va="top", fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -883,7 +841,7 @@ def draw_current_scan(
 ) -> list[str]:
     runs = _selected_cv_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CV 数据")
+        _empty_plot(figure)
         return ["没有选择 CV 数据"]
     _ensure_summaries(runs)
     warnings: list[str] = []
@@ -895,7 +853,7 @@ def draw_current_scan(
     if target is None:
         window = [run.voltage_window for run in runs if run.voltage_window]
         if not window:
-            _message(figure, style, "请先在分析面板输入目标电位")
+            _empty_plot(figure)
             return ["缺少目标电位"]
         low = max(float(np.nanmin(run.potential)) for run in runs)
         high = min(float(np.nanmax(run.potential)) for run in runs)
@@ -908,7 +866,7 @@ def draw_current_scan(
         if (up is not None and np.isfinite(up)) or (down is not None and np.isfinite(down)):
             usable.append((point, up, down))
     if not usable:
-        _message(figure, style, f"在 {target:g} V 处没有可用的电流数据")
+        _empty_plot(figure)
         return warnings + ["没有可用的固定电位电流"]
 
     all_values = [abs(value) for _, up, down in usable for value in (up, down) if value is not None and np.isfinite(value)]
@@ -935,8 +893,6 @@ def draw_current_scan(
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
-    if warnings:
-        ax.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax.transAxes, ha="left", va="top", fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -951,7 +907,7 @@ def draw_b_value(
 ) -> list[str]:
     runs = _selected_cv_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CV 数据")
+        _empty_plot(figure)
         return ["没有选择 CV 数据"]
     _ensure_summaries(runs)
     warnings: list[str] = []
@@ -973,41 +929,27 @@ def draw_b_value(
         current_mode=current_mode,
         cycle_selection=spec.cycle_selection,
     )
-    rates = []
-    currents = []
-    labels = []
-    for point in points:
-        value = point.current_abs_A
-        if value is None or not np.isfinite(value):
-            continue
-        normalized = normalize_current(
-            value,
-            normalization,
-            area_cm2=point.area_cm2,
-            mass_mg=point.mass_mg,
-        )
-        normalized = float(np.asarray(normalized, dtype=float))
-        if not np.isfinite(normalized) or normalized <= 0:
-            continue
-        rates.append(point.scan_rate)
-        currents.append(normalized)
-        labels.append(point.label)
-    if len(rates) < 2:
-        _message(figure, style, "b 值分析至少需要两个不同扫速下的有效电流")
-        return warnings + ["b 值分析数据不足"]
-    rates_arr = np.asarray(rates, dtype=float)
-    currents_arr = np.asarray(currents, dtype=float)
-    slope, intercept, r2 = _fit_power_law(rates_arr, currents_arr)
+    result = fit_b_value(points, normalization=normalization, allow_unfitted=True)
+    rates_arr, currents_arr = result.scan_rates, result.currents
+    slope, intercept, r2 = result.slope, result.intercept, result.r2
+    warnings.extend(result.warnings)
+    window_warning = scan_window_warning(points)
+    if window_warning:
+        warnings.append(window_warning)
+    if not rates_arr.size:
+        _empty_plot(figure)
+        return warnings
     unit, factor = _resolve_current_unit(spec, currents_arr, normalization, warnings)
     colors = resolve_color_cycle(style, 3, color_config)
 
     figure.clear()
     ax = figure.add_subplot(111)
     ax.loglog(rates_arr, currents_arr * factor, "o", color=colors[0], markersize=style.marker_size + 2, label=plot_text(spec, "legend.measured"))
-    fit_x = np.geomspace(float(np.min(rates_arr)), float(np.max(rates_arr)), 100)
-    ax.loglog(fit_x, (10**intercept) * fit_x**slope * factor, "-", color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.fitted_line"))
-    for guide, guide_color in ((0.5, "#999999"), (1.0, "#bbbbbb")):
-        ax.loglog(fit_x, fit_x**guide * (currents_arr[0] / rates_arr[0] ** 0.5) * factor, ":", color=guide_color, linewidth=0.9, label=plot_text(spec, "legend.guide_b", guide=guide))
+    if np.isfinite(slope):
+        fit_x = np.geomspace(float(np.min(rates_arr)), float(np.max(rates_arr)), 100)
+        ax.loglog(fit_x, (10**intercept) * fit_x**slope * factor, "-", color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.fitted_line"))
+        for guide, guide_color in ((0.5, "#999999"), (1.0, "#bbbbbb")):
+            ax.loglog(fit_x, fit_x**guide * (currents_arr[0] / rates_arr[0] ** guide) * factor, ":", color=guide_color, linewidth=0.9, label=plot_text(spec, "legend.guide_b", guide=guide))
     _set_labels(
         ax,
         style,
@@ -1015,24 +957,23 @@ def draw_b_value(
         axis_text(spec, "main", "y", normalization=normalization, unit=unit),
     )
     set_axis_display_units(ax, x=("V/s", 1.0), y=(unit, factor))
-    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_bvalue", target=target))
+    sweep = {"up": "forward sweep", "down": "reverse sweep", "absolute": "mean |i|, both sweeps"}[current_mode]
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_bvalue", target=target, sweep=sweep))
     # This is a log/log chart. Keep decade labels and suppress the minor
     # scientific-notation labels that collide when the scan-rate range is
     # narrow (a common case with only a few selected runs).
     ax.xaxis.set_major_formatter(mticker.LogFormatterSciNotation(labelOnlyBase=True))
     ax.xaxis.set_minor_formatter(mticker.NullFormatter())
-    if style.annotation and spec.annotations:
+    if style.annotation and spec.annotations and np.isfinite(slope):
         lines = [
             plot_text(spec, "annotation.cv_bvalue.b", b=slope),
             plot_text(spec, "annotation.cv_bvalue.r2", r2=r2),
-            plot_text(spec, "annotation.cv_bvalue.n", n=len(rates)),
+            plot_text(spec, "annotation.cv_bvalue.n", n=len(np.unique(rates_arr))),
         ]
         _annotate(ax, style, "\n".join(line for line in lines if line))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
-    if warnings:
-        ax.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax.transAxes, ha="left", va="top", fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -1047,7 +988,7 @@ def draw_contribution(
 ) -> list[str]:
     runs = _selected_cv_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CV 数据")
+        _empty_plot(figure)
         return ["没有选择 CV 数据"]
     _ensure_summaries(runs)
     try:
@@ -1056,9 +997,11 @@ def draw_contribution(
             normalization=spec.normalization,
             selected_scan_rate=spec.selected_scan_rate,
             cycle_selection=spec.cycle_selection,
+            branch=spec.analysis_options.get("dunn_branch", "up"),
+            fraction_basis=spec.analysis_options.get("dunn_fraction_basis", "fitted"),
         )
     except AnalysisError as exc:
-        _message(figure, style, str(exc))
+        _empty_plot(figure)
         return [str(exc)]
 
     warnings = list(result.warnings)
@@ -1072,13 +1015,17 @@ def draw_contribution(
     total = result.total_current * factor
     capacitive = result.capacitive_current * factor
     diffusive = result.diffusive_current * factor
-    ax.plot(x, total, color="#222222", linewidth=style.line_width, label=plot_text(spec, "legend.total"))
+    if result.measured_current is not None:
+        ax.plot(x, result.measured_current * factor, color="#222222", linewidth=style.line_width,
+                label=plot_text(spec, "legend.total"))
+    ax.plot(x, total, color="#777777", linestyle="--", linewidth=style.line_width,
+            label=plot_text(spec, "legend.dunn_fit"))
     ax.plot(x, capacitive, color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.capacitive"))
     ax.plot(x, diffusive, color=colors[1], linewidth=style.line_width, label=plot_text(spec, "legend.diffusive"))
     ax.fill_between(
         x,
         capacitive,
-        total,
+        0,
         color=colors[0],
         alpha=_option_float(spec.analysis_options, "fill_alpha", 0.12, 0.0, 1.0),
     )
@@ -1089,18 +1036,20 @@ def draw_contribution(
         axis_text(spec, "main", "y", normalization=result.normalization, unit=unit),
     )
     set_axis_display_units(ax, x=("V", 1.0), y=(unit, factor))
-    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_contribution", scan_rate=result.scan_rate))
+    sweep = "Reverse" if spec.analysis_options.get("dunn_branch") == "down" else "Forward"
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(
+        spec, "title.cv_contribution", scan_rate=result.scan_rate, sweep=sweep))
     if style.annotation and spec.annotations:
         lines = [
-            plot_text(spec, "annotation.cv_contribution.capacitive", pct=result.capacitive_fraction * 100),
+            plot_text(spec, "annotation.cv_contribution.capacitive", pct=result.capacitive_fraction * 100,
+                      basis=result.fraction_basis)
+            if np.isfinite(result.capacitive_fraction) else "",
             plot_text(spec, "annotation.cv_contribution.mean_r2", r2=result.mean_r2),
         ]
         _annotate(ax, style, "\n".join(line for line in lines if line))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
-    if warnings:
-        ax.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax.transAxes, ha="left", va="top", fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -1115,7 +1064,7 @@ def draw_trasatti(
 ) -> list[str]:
     runs = _selected_cv_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CV 数据")
+        _empty_plot(figure)
         return ["没有选择 CV 数据"]
     _ensure_summaries(runs)
     warnings: list[str] = []
@@ -1124,51 +1073,12 @@ def draw_trasatti(
         warnings.append("部分数据缺少面积/质量参数，已回退为原始电荷")
         normalization = "none"
     points = collect_scan_rate_points(runs, cycle_selection=spec.cycle_selection)
-    xs: list[float] = []
-    charges: list[float] = []
-    for point in points:
-        width = (
-            point.integration_width_V
-            if point.integration_width_V is not None
-            and np.isfinite(point.integration_width_V)
-            and point.integration_width_V > 0
-            else point.voltage_window
-        )
-        if (
-            point.capacitance_F is None
-            or width is None
-            or not np.isfinite(width)
-            or width <= 0
-            or point.scan_rate <= 0
-            or not np.isfinite(point.capacitance_F)
-        ):
-            continue
-        charge = normalize_charge(
-            point.capacitance_F * width,
-            normalization,
-            area_cm2=point.area_cm2,
-            mass_mg=point.mass_mg,
-        )
-        if charge is None or not np.isfinite(charge):
-            continue
-        xs.append(1.0 / np.sqrt(point.scan_rate))
-        charges.append(float(charge))
-    if len(xs) < 2:
-        _message(figure, style, "Trasatti 分析至少需要两个不同扫速")
-        return warnings + ["Trasatti 分析数据不足"]
-    try:
-        warnings.extend(trasatti_analysis(points).warnings)
-    except AnalysisError:
-        pass
-    x_values = np.asarray(xs, dtype=float)
-    y_values = np.asarray(charges, dtype=float)
-    slope, intercept = np.polyfit(x_values, y_values, 1)
-    predicted = intercept + slope * x_values
-    ss_res = float(np.sum((y_values - predicted) ** 2))
-    ss_tot = float(np.sum((y_values - np.mean(y_values)) ** 2))
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-    q_low = float(y_values[np.argmax(x_values)])
-    fraction = intercept / q_low if q_low else float("nan")
+    result = trasatti_analysis(points, normalization=normalization, allow_unfitted=True)
+    warnings.extend(result.warnings)
+    x_values, y_values = result.inv_sqrt_rate, result.charges_C
+    if not x_values.size:
+        _empty_plot(figure)
+        return warnings
     family = charge_family(normalization)
     override = _unit_override(spec, "charge")
     unit, factor = resolve_unit(family, y_values, override, use_max=False)
@@ -1179,8 +1089,9 @@ def draw_trasatti(
     figure.clear()
     ax = figure.add_subplot(111)
     ax.plot(x_values, y_values * factor, "o", color=colors[0], markersize=style.marker_size + 2, label=plot_text(spec, "legend.measured"))
-    fit_x = np.linspace(float(np.min(x_values)), float(np.max(x_values)), 100)
-    ax.plot(fit_x, (intercept + slope * fit_x) * factor, "-", color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.fitted_line"))
+    if np.isfinite(result.slope):
+        fit_x = np.linspace(float(np.min(x_values)), float(np.max(x_values)), 100)
+        ax.plot(fit_x, (result.q_capacitive_C + result.slope * fit_x) * factor, "-", color=colors[0], linewidth=style.line_width, label=plot_text(spec, "legend.fitted_line"))
     _set_labels(
         ax,
         style,
@@ -1189,18 +1100,22 @@ def draw_trasatti(
     )
     set_axis_display_units(ax, x=("(V/s)^-1/2", 1.0), y=(unit, factor))
     _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_trasatti"))
-    if style.annotation and spec.annotations:
+    if style.annotation and spec.annotations and np.isfinite(result.slope):
         lines = [
-            plot_text(spec, "annotation.cv_trasatti.q_cap", q_cap=intercept * factor, unit=unit),
-            plot_text(spec, "annotation.cv_trasatti.fraction", pct=fraction * 100),
-            plot_text(spec, "annotation.cv_trasatti.r2", r2=r2),
+            plot_text(spec, "annotation.cv_trasatti.q_cap", q_cap=result.q_capacitive_C * factor, unit=unit),
+            plot_text(spec, "annotation.cv_trasatti.r2", r2=result.r2),
         ]
+        if result.q_total_C is not None:
+            lines.insert(1, plot_text(spec, "annotation.cv_trasatti.q_total", q_total=result.q_total_C * factor, unit=unit))
+        if result.capacitive_fraction_total is not None:
+            lines.insert(-1, plot_text(spec, "annotation.cv_trasatti.fraction", pct=result.capacitive_fraction_total * 100))
+        if result.capacitive_fraction_low_rate is not None:
+            lines.insert(-1, plot_text(spec, "annotation.cv_trasatti.fraction_low_rate",
+                                       pct=result.capacitive_fraction_low_rate * 100, rate=min(result.scan_rates)))
         _annotate(ax, style, "\n".join(line for line in lines if line))
     if style.legend and spec.show_legend:
         legend = ax.legend(loc=style.legend_location, fontsize=style.legend_size, frameon=style.legend_frame, shadow=style.legend_shadow)
         style.style_legend(legend)
-    if warnings:
-        ax.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax.transAxes, ha="left", va="top", fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -1215,7 +1130,7 @@ def draw_contribution_vs_rate(
 ) -> list[str]:
     runs = _selected_cv_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CV 数据")
+        _empty_plot(figure)
         return ["没有选择 CV 数据"]
     _ensure_summaries(runs)
     try:
@@ -1223,13 +1138,15 @@ def draw_contribution_vs_rate(
             runs,
             normalization=spec.normalization,
             cycle_selection=spec.cycle_selection,
+            branch=spec.analysis_options.get("dunn_branch", "up"),
+            fraction_basis=spec.analysis_options.get("dunn_fraction_basis", "fitted"),
         )
     except AnalysisError as exc:
-        _message(figure, style, str(exc))
+        _empty_plot(figure)
         return [str(exc)]
 
     if result.scan_rates.size == 0:
-        _message(figure, style, "没有可用于贡献占比分析的扫速")
+        _empty_plot(figure)
         return ["没有可用于贡献占比分析的扫速"]
 
     rates = result.scan_rates
@@ -1242,11 +1159,36 @@ def draw_contribution_vs_rate(
     ax = figure.add_subplot(111)
     bar_width = _option_float(spec.analysis_options, "bar_width", 0.72, 0.1, 1.0)
     bar_alpha = _option_float(spec.analysis_options, "bar_alpha", 1.0, 0.05, 1.0)
-    ax.bar(positions, capacitive, width=bar_width, alpha=bar_alpha, color=colors[0], label=plot_text(spec, "legend.capacitive"))
-    ax.bar(positions, diffusive, bottom=capacitive, width=bar_width, alpha=bar_alpha, color=colors[1], label=plot_text(spec, "legend.diffusive"))
+    layout = spec.analysis_options.get("dunn_bar_layout", "auto")
+    if layout not in ("grouped", "stacked"):
+        layout = "grouped" if result.fraction_basis == "measured" else "stacked"
+    if layout == "stacked":
+        # Opposite-signed bars extend from zero on their respective sides.
+        same_sign = np.signbit(capacitive) == np.signbit(diffusive)
+        capacitive_base = np.where(same_sign, diffusive, 0.0)
+        offset = 0.0
+    else:
+        capacitive_base = np.zeros_like(capacitive)
+        offset = bar_width / 4
+        bar_width /= 2
+    for x, values, bottom, color, key in (
+        (positions - offset, capacitive, capacitive_base, colors[0], "legend.capacitive"),
+        (positions + offset, diffusive, 0, colors[1], "legend.diffusive"),
+    ):
+        bars = ax.bar(x, values, bottom=bottom, width=bar_width, alpha=bar_alpha,
+                      color=color, label=plot_text(spec, key))
+        if style.annotation and spec.annotations:
+            ax.bar_label(bars, labels=[
+                plot_text(spec, "annotation.cv_contribution_vs_rate.bar_pct", pct=value)
+                if np.isfinite(value) and abs(value) >= 0.5 else "" for value in values
+            ], label_type="center", fontsize=max(6.0, style.annotation_size - 1))
     ax.set_xticks(positions)
     ax.set_xticklabels([f"{rate:g}" for rate in rates])
-    ax.set_ylim(0.0, 100.0)
+    values = np.concatenate((capacitive + capacitive_base, diffusive))
+    finite = values[np.isfinite(values)]
+    low = min(0.0, finite.min(initial=0.0))
+    high = max(100.0, finite.max(initial=100.0))
+    ax.set_ylim(low if low < -1e-10 else 0.0, high if high > 100 + 1e-10 else 100.0)
     set_axis_display_units(ax, y=("%", 1.0))
     if len(rates) > 6:
         ax.tick_params(axis="x", labelrotation=45)
@@ -1258,32 +1200,12 @@ def draw_contribution_vs_rate(
         axis_text(spec, "main", "x"),
         axis_text(spec, "main", "y"),
     )
-    _title(ax, style, safe_format(spec.title, {}) or plot_text(spec, "title.cv_contribution_vs_rate"))
+    sweep = "Reverse" if spec.analysis_options.get("dunn_branch") == "down" else "Forward"
+    low, high = result.potential_window
+    _title(ax, style, safe_format(spec.title, {}) or plot_text(
+        spec, "title.cv_contribution_vs_rate", sweep=sweep, low=low, high=high))
 
     if style.annotation and spec.annotations:
-        for position, cap_value, diff_value in zip(positions, capacitive, diffusive):
-            if np.isfinite(cap_value):
-                ax.text(
-                    position,
-                    cap_value / 2.0,
-                    plot_text(spec, "annotation.cv_contribution_vs_rate.bar_pct", pct=cap_value),
-                    ha="center",
-                    va="center",
-                    fontsize=max(6.0, style.annotation_size - 1),
-                    color="white" if cap_value > 18 else "#263238",
-                    fontfamily=style.text_font_family(),
-                )
-            if np.isfinite(diff_value) and diff_value > 18:
-                ax.text(
-                    position,
-                    cap_value + diff_value / 2.0,
-                    plot_text(spec, "annotation.cv_contribution_vs_rate.bar_pct", pct=diff_value),
-                    ha="center",
-                    va="center",
-                    fontsize=max(6.0, style.annotation_size - 1),
-                    color="white",
-                    fontfamily=style.text_font_family(),
-                )
         lines = [
             plot_text(spec, "annotation.cv_contribution_vs_rate.n", n=len(rates)),
             plot_text(spec, "annotation.cv_contribution_vs_rate.mean_r2", r2=result.mean_r2),
@@ -1298,18 +1220,6 @@ def draw_contribution_vs_rate(
             shadow=style.legend_shadow,
         )
         style.style_legend(legend)
-    if result.warnings:
-        ax.text(
-            0.02,
-            0.98,
-            "\n".join(result.warnings[:3]),
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=max(8, style.annotation_size - 1),
-            color="#a33",
-            fontfamily=_cjk_fonts(),
-        )
     _finish(figure, style, spec)
     return list(result.warnings)
 
@@ -1338,5 +1248,5 @@ def draw(
         return draw_contribution_vs_rate(figure, dataset, spec, style, color_config=color_config)
     if spec.kind == "cv_trasatti":
         return draw_trasatti(figure, dataset, spec, style, color_config=color_config)
-    _message(figure, style, f"未知绘图类型: {spec.kind}")
+    _empty_plot(figure)
     return [f"未知绘图类型: {spec.kind}"]

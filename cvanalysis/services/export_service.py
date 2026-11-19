@@ -82,6 +82,10 @@ def eis_metrics_frame(dataset: Dataset) -> pd.DataFrame:
                 "Rct_ohm": metrics.rct_ohm if metrics else None,
                 "f_peak_Hz": metrics.f_peak_hz if metrics else None,
                 "Cdl_F": metrics.cdl_F if metrics else None,
+                "effective_capacitance_F": metrics.effective_capacitance_F if metrics else None,
+                "fit_model": metrics.fit_model if metrics else None,
+                "fit_frequency_low_Hz": metrics.fit_frequency_range_hz[0] if metrics and metrics.fit_frequency_range_hz else None,
+                "fit_frequency_high_Hz": metrics.fit_frequency_range_hz[1] if metrics and metrics.fit_frequency_range_hz else None,
                 "tau_s": metrics.tau_s if metrics else None,
                 "phase_at_1Hz_deg": metrics.phase_at_1hz_deg if metrics else None,
                 "mag_at_1Hz_ohm": metrics.mag_at_1hz_ohm if metrics else None,
@@ -178,6 +182,8 @@ def cp_cycles_frame(dataset: Dataset) -> pd.DataFrame:
                     "power_W_kg": cycle.power_W_kg,
                     "mean_discharge_potential_V": cycle.mean_discharge_potential_V,
                     "ir_drop_V": cycle.ir_drop_V,
+                    "completeness": cycle.completeness,
+                    "cycle_warning": cycle.cycle_warning,
                 }
             )
     return pd.DataFrame(rows)

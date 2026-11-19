@@ -10,7 +10,13 @@ from cvanalysis.io.registry import load_files
 from cvanalysis.ui.main_window import MainWindow
 
 
-def test_workspace_import_and_plot_smoke(tmp_path, synthetic_cv_runs, synthetic_eis_run):
+def test_workspace_import_and_plot_smoke(tmp_path, synthetic_cv_runs, synthetic_eis_run, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+    choices = iter((0, 1))
+    monkeypatch.setattr(QInputDialog, "getItem", lambda parent, title, text, items, index, editable:
+                        (items[next(choices)], True))
+    notices = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: notices.append(args))
     app = QApplication.instance() or QApplication([])
     window = MainWindow(settings_path=tmp_path / "config.json")
     window.settings_service.settings["analysis"]["area_cm2"] = 2.0
@@ -38,6 +44,22 @@ def test_workspace_import_and_plot_smoke(tmp_path, synthetic_cv_runs, synthetic_
     ):
         window._request_plot(kind)
         app.processEvents()
+        if kind == "cv_contribution":
+            assert window._active_plot_tab().spec.analysis_options["dunn_fraction_basis"] == "fitted"
+        if kind == "cv_contribution_vs_rate":
+            tab = window._active_plot_tab()
+            assert tab.figure.axes[0].get_ylabel() == "Contribution (% of measured charge)"
+            control = window.options_panel.controls["dunn_fraction_basis"]
+            control.setCurrentIndex(control.findData("fitted"))
+            window.options_panel.apply()
+            assert tab.spec.analysis_options["dunn_fraction_basis"] == "fitted"
+            assert len(notices) == 1
+            layout = window.options_panel.controls["dunn_bar_layout"]
+            layout.setCurrentIndex(layout.findData("grouped"))
+            window.options_panel.apply()
+            cap, diff = tab.figure.axes[0].containers[:2]
+            assert cap[0].get_x() < diff[0].get_x()
+            assert type(tab.spec).from_dict(tab.spec.to_dict()).analysis_options["dunn_bar_layout"] == "grouped"
     assert window.tabs.count() >= 7
 
     window._select_run_ids([synthetic_eis_run.run_id])
@@ -51,6 +73,35 @@ def test_workspace_import_and_plot_smoke(tmp_path, synthetic_cv_runs, synthetic_
     assert synthetic_eis_run.run_id in window.fits
     assert any(window.tabs.widget(i).spec.kind == "eis_fit" for i in range(window.tabs.count()))
     window.close()
+
+
+def test_plot_warnings_go_to_nonmodal_popup_and_workspace_log(tmp_path, synthetic_cv_runs):
+    from PySide6.QtGui import QColor
+    from cvanalysis.domain.models import Dataset
+    from cvanalysis.plotting.spec import PlotSpec
+    from cvanalysis.ui.theme import theme_color
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(settings_path=tmp_path / "config.json")
+    window.dataset = Dataset(cv_runs=list(synthetic_cv_runs[:2]))
+    spec = PlotSpec("cv_contribution_vs_rate", [run.run_id for run in window.dataset.cv_runs])
+    tab = window._add_plot_tab(spec)
+    app.processEvents()
+    message = next(w for w in tab.warnings if "两个不同扫速" in w)
+    box = window._plot_warning_box
+    assert box.isVisible() and not box.isModal()
+    assert message in box.text()
+    box.accept()
+    tab.redraw()
+    app.processEvents()
+    assert not box.isVisible()
+    assert window.log_view.toPlainText().count(message) == 1
+    log_item = window.log_view.document().find(message)
+    assert log_item.charFormat().foreground().color() == QColor(theme_color("error"))
+    window._add_plot_tab(spec.copy())
+    assert box.isVisible()
+    window.close()
+    assert not box.isVisible()
 
 
 def test_dataset_tree_model_parent_and_row_identity(tmp_path, synthetic_cv_runs):
@@ -229,12 +280,12 @@ def test_plot_selection_is_per_tab_and_new_plots_use_checked_runs(tmp_path, synt
     index = window.dataset_model.index_for_run(first.run_id)
     window.dataset_model.setData(index, Qt.Unchecked, Qt.CheckStateRole)
     app.processEvents()
-    assert overlay.spec.run_ids == original_ids
+    assert overlay.spec.run_ids == original_ids[1:]
     second = synthetic_cv_runs[1]
     second_index = window.dataset_model.index_for_run(second.run_id)
     window.dataset_model.setData(second_index, Qt.Unchecked, Qt.CheckStateRole)
     app.processEvents()
-    assert overlay.spec.run_ids == original_ids
+    assert overlay.spec.run_ids == original_ids[2:]
 
     window._request_plot("cv_cap_scan")
     app.processEvents()
@@ -245,6 +296,18 @@ def test_plot_selection_is_per_tab_and_new_plots_use_checked_runs(tmp_path, synt
     ][-1]
     assert created.spec.run_ids == [synthetic_cv_runs[2].run_id]
 
+    model = window.dataset_model
+    assert model.setData(model.index_for_run(second.run_id), Qt.Checked, Qt.CheckStateRole)
+    assert created.spec.run_ids == original_ids[1:]
+    assert overlay.spec.run_ids == original_ids[2:]
+    window.tabs.setCurrentWidget(overlay)
+    assert model.data(model.index_for_run(second.run_id), Qt.CheckStateRole) == Qt.Unchecked
+    assert model.setData(model.index(0, 0, model.index_for_run(original_ids[2])), Qt.Unchecked, Qt.CheckStateRole)
+    assert len(overlay.spec.cycle_selection[original_ids[2]]) == len(synthetic_cv_runs[2].cycles) - 1
+    assert original_ids[2] not in created.spec.cycle_selection
+    assert model.setData(model.index(0, 0), Qt.Unchecked, Qt.CheckStateRole)
+    assert overlay.spec.run_ids == []
+
     window._request_plot("cv_overlay", run_ids=[first.run_id])
     explicit = [
         window.tabs.widget(i)
@@ -252,8 +315,40 @@ def test_plot_selection_is_per_tab_and_new_plots_use_checked_runs(tmp_path, synt
         if window.tabs.widget(i).spec.kind == "cv_overlay"
     ][-1]
     assert explicit.spec.run_ids == [first.run_id]
+    assert first.run_id not in explicit.spec.cycle_selection
     assert "follow_dataset" not in explicit.spec.to_dict()
     window.close()
+
+
+def test_import_checks_only_new_compatible_runs_when_one_plot_exists(tmp_path, synthetic_cv_runs, synthetic_eis_run):
+    from PySide6.QtCore import Qt
+    from cvanalysis.domain.models import Dataset
+    from cvanalysis.plotting.spec import PlotSpec
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(settings_path=tmp_path / "config.json")
+    app.processEvents()
+    first, second, third = synthetic_cv_runs
+    window._on_import_complete(Dataset(cv_runs=[first]), [])
+    overlay = window._active_plot_tab()
+    window._on_import_complete(Dataset(cv_runs=[second], eis_runs=[synthetic_eis_run]), [])
+    assert overlay.spec.run_ids == [first.run_id, second.run_id]
+    model = window.dataset_model
+    eis = model.index_for_run(synthetic_eis_run.run_id)
+    assert not (model.flags(eis) & Qt.ItemIsUserCheckable)
+    assert model.flags(eis) & Qt.ItemIsSelectable
+    assert not model.setData(eis, Qt.Checked, Qt.CheckStateRole)
+
+    other = window._add_plot_tab(PlotSpec("cv_overlay", [second.run_id]))
+    window._on_import_complete(Dataset(cv_runs=[third]), [])
+    for tab in (overlay, other):
+        window.tabs.setCurrentWidget(tab)
+        assert model.data(model.index_for_run(third.run_id), Qt.CheckStateRole) == Qt.Unchecked
+        assert third.run_id not in tab.spec.run_ids
+    assert model.setData(model.index_for_run(third.run_id), Qt.Checked, Qt.CheckStateRole)
+    assert third.run_id in other.spec.run_ids and third.run_id not in overlay.spec.run_ids
+    window.close()
+    app.processEvents()
 
 
 def test_plot_data_dialog_collects_runs_cycles_and_templates(tmp_path, synthetic_cv_runs):

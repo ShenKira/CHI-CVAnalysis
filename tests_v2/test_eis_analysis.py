@@ -48,3 +48,25 @@ def test_frequency_filter(synthetic_eis_run):
     assert np.all(filtered.freq >= 0.1)
     assert np.all(filtered.freq <= 1000)
     assert len(filtered.freq) < len(synthetic_eis_run.freq)
+
+
+def test_eis_rejects_depressed_and_truncated_arcs_for_geometric_rct(synthetic_eis_run):
+    from dataclasses import replace
+
+    f = np.logspace(5, -5, 201)
+    omega = 2 * np.pi * f
+    q = 1 / (100 * (2 * np.pi * 100)**.6)
+    z = 10 + 1 / (.01 + q * (1j * omega)**.6)
+    run = replace(synthetic_eis_run, freq=f, z_real=z.real, z_imag=z.imag,
+                  z_mag=abs(z), phase=np.angle(z, deg=True))
+    quick = analyze_eis(run)
+    assert quick.rct_ohm is None and quick.cdl_F is None
+    assert quick.f_peak_hz == pytest.approx(100.)
+    fit = fit_eis_model(f, z.real, z.imag, "rct_cpe")
+    model_metrics = metrics_from_fit(run, fit, quick)
+    assert model_metrics.rct_ohm == pytest.approx(100., rel=1e-5)
+    assert model_metrics.fit_frequency_range_hz == pytest.approx((1e-5, 1e5))
+    truncated = analyze_eis(filter_eis_run(run, 80., 250.))
+    assert truncated.rct_ohm is None and truncated.recommended_model is None
+    run.z_real[-2] = .3
+    assert analyze_eis(run).rs_ohm > 9

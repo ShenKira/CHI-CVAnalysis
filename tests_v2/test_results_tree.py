@@ -210,7 +210,7 @@ def test_cp_children_and_eis_has_no_children(synthetic_cp_run, synthetic_eis_run
     assert model.data(model.index(0, 4, parent)) == (
         f"{cycle.coulombic_efficiency_pct:.2f}%"
     )
-    assert model.data(model.index(0, 5, parent)) == f"{cycle.ir_drop_V:.3g} V"
+    assert model.data(model.index(0, 5, parent)) == "—"
     assert model.data(model.index(0, 6, parent)) == ""
     assert model.data(model.index(0, 7, parent)) == ""
 

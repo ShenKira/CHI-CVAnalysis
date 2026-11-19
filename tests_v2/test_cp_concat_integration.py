@@ -95,7 +95,7 @@ def test_project_roundtrip_renders_concatenated_percentage(synthetic_cp_run, tmp
     warnings = draw_cp_capacity(
         figure, restored.dataset, restored_spec, STYLE
     )
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     line = figure.axes[0].lines[0]
     expected_x = cycle_count + 2
     np.testing.assert_allclose(line.get_xdata(), [1, expected_x])

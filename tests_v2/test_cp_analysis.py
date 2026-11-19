@@ -66,7 +66,8 @@ def test_completed_cp_series_reuses_summary_segments(synthetic_cp_run):
     assert np.array_equal(reused.potential_V, fresh.potential_V)
     assert np.array_equal(reused.current_A, fresh.current_A)
     assert np.array_equal(reused.hold_mask, fresh.hold_mask)
-    assert reused.warnings == fresh.warnings
+    assert reused.warnings == summary.warnings
+    assert set(fresh.warnings) <= set(reused.warnings)
 
 
 def test_cp_gcd_redraw_does_not_rebuild_segments(synthetic_cp_run, monkeypatch):
@@ -120,7 +121,48 @@ def test_cp_metrics_use_electrode_params(synthetic_cp_run):
     assert cycle.specific_capacity_mAh_g == pytest.approx(2e-6 / 1e-3 / 3.6, rel=0.05)
     assert cycle.areal_capacity_C_cm2 == pytest.approx(2e-6 / 2.0, rel=0.05)
     assert np.isfinite(cycle.discharge.energy_J) and cycle.discharge.energy_J > 0
-    assert cycle.ir_drop_V >= 0
+    assert np.isnan(cycle.ir_drop_V)  # holds hide the current switch
+    assert any("IR 降留空" in warning for warning in summary.warnings)
+
+
+@pytest.mark.parametrize("step", [.25, .5, 1.])
+@pytest.mark.parametrize("jump", [0., .1])
+def test_cp_ir_drop_excludes_capacitive_slope(step, jump):
+    from cvanalysis.domain.models import CPMetadata, CPRun
+
+    charge_time = np.arange(0, 4 + step, step)
+    discharge_time = np.arange(4 + step, 8 + step, step)
+    time = np.r_[charge_time, discharge_time]
+    potential = np.r_[charge_time / 4, (1 - jump) * (8 - discharge_time) / 4]
+    run = CPRun("test-cp-ir", "test", time, potential, CPMetadata(
+        high_e=1, low_e=0, anodic_current_A=.01, cathodic_current_A=.01,
+        switch_polarity="Potential",
+    ))
+    summary = analyze_cp_run(run)
+    assert summary.cycles[0].ir_drop_V == pytest.approx(jump, abs=1e-9)
+
+
+@pytest.mark.parametrize("mode,expected", [("Potential", "partial"), ("Time", "complete")])
+def test_cp_cycle_uses_switch_protocol_and_keeps_missing_current_blank(mode, expected):
+    from cvanalysis.domain.models import CPMetadata, CPRun
+    from cvanalysis.services.export_service import cp_cycles_frame
+
+    run = CPRun("test-cp-protocol", "test", np.arange(9.), np.r_[np.linspace(0, 1, 5), .95, .90, .85, .80],
+                CPMetadata(high_e=1, low_e=0, anodic_current_A=.01, cathodic_current_A=.02,
+                           anodic_time_s=4, cathodic_time_s=4, switch_polarity=mode))
+    cycle = analyze_cp_run(run).cycles[0]
+    assert cycle.completeness == expected
+    if mode == "Time":
+        assert cycle.coulombic_efficiency_pct == pytest.approx(200.)
+    else:
+        assert np.isnan(cycle.coulombic_efficiency_pct)
+    run.metadata.cathodic_current_A = None
+    summary = analyze_cp_run(run, force=True)
+    assert np.isnan(summary.cycles[0].discharge_capacity_C)
+    assert any("阴极恒流" in warning for warning in summary.warnings)
+    frame = cp_cycles_frame(Dataset(cp_runs=[run]))
+    assert frame.loc[0, "completeness"] == expected
+    assert np.isnan(frame.loc[0, "coulombic_efficiency_pct"])
 
 
 def test_cp_fallback_turn_detection_without_scipy():
@@ -203,7 +245,7 @@ def test_cp_area_capacity_honours_include_holds(synthetic_cp_run):
         },
     )
     warnings = draw_cp_capacity(figure, dataset, spec, style)
-    assert not warnings
+    assert any("IR 降留空" in warning for warning in warnings)
     lines = figure.axes[0].lines
     expected_discharge = [
         cycle.areal_capacity_with_holds_mAh_cm2 for cycle in run.summary.cycles
@@ -248,7 +290,7 @@ def test_cp_plot_renderers(synthetic_cp_run):
         analysis_options={"complete_holds": True},
     )
     warnings = draw_gcd_curve(figure, dataset, spec, style)
-    assert not warnings
+    assert any("IR 降留空" in warning for warning in warnings)
     assert figure.axes[0].get_xlabel() == "Time (s)"
     assert figure.axes[0].get_ylabel() == "Potential (V)"
     assert figure.axes[0].get_legend() is not None
@@ -261,7 +303,7 @@ def test_cp_plot_renderers(synthetic_cp_run):
         analysis_options={"include_holds": False, "show_charge": True, "show_efficiency": True},
     )
     warnings = draw_cp_capacity(figure, dataset, spec, style)
-    assert not warnings
+    assert any("IR 降留空" in warning for warning in warnings)
     assert figure.axes[0].get_xlabel() == "Cycle"
     assert "mAh/g" in figure.axes[0].get_ylabel()
     assert len(figure.axes) == 2

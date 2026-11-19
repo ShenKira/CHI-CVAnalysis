@@ -171,11 +171,14 @@ class CPCycle:
     ir_drop_V: float
     areal_capacity_with_holds_C_cm2: float = float("nan")
     areal_capacity_with_holds_mAh_cm2: float = float("nan")
+    completeness: str = "complete"
+    cycle_warning: str = ""
 
     @property
     def valid(self) -> bool:
         return (
-            np.isfinite(self.charge_capacity_C)
+            self.completeness == "complete"
+            and np.isfinite(self.charge_capacity_C)
             and np.isfinite(self.discharge_capacity_C)
             and self.charge_capacity_C > 0
             and self.discharge_capacity_C > 0
@@ -404,30 +407,12 @@ def _segment_windows(run: CPRun) -> list[tuple[int, int, int]]:
     return merged
 
 
-def _fallback_current(run: CPRun, holds: list[CPHoldRecord]) -> float | None:
-    values = [
-        abs(record.mean_current_A)
-        for record in holds
-        if np.isfinite(record.mean_current_A) and record.mean_current_A != 0
-    ]
-    if values:
-        return float(np.median(values))
-    return None
-
-
-def _segment_current(
-    run: CPRun,
-    direction: int,
-    fallback: float | None,
-) -> tuple[float, str | None]:
+def _segment_current(run: CPRun, direction: int) -> tuple[float, str | None]:
     metadata = run.metadata
     value = metadata.anodic_current_A if direction > 0 else metadata.cathodic_current_A
     if value is None or not np.isfinite(value) or value == 0:
-        value = metadata.cathodic_current_A if direction > 0 else metadata.anodic_current_A
-    if value is None or not np.isfinite(value) or value == 0:
-        if fallback is not None:
-            return float(abs(fallback)), None
-        return float("nan"), "缺少施加电流信息，无法计算容量"
+        branch = "阳极" if direction > 0 else "阴极"
+        return float("nan"), f"缺少{branch}恒流设定，相关容量、效率或能量不可用"
     return float(abs(value)), None
 
 
@@ -531,12 +516,11 @@ def _assign_holds(
 def build_segments(run: CPRun, *, warn: bool = True) -> tuple[list[CPSegment], list[CPHoldRecord], list[str]]:
     warnings: list[str] = []
     holds = split_hold_records(run)
-    fallback = _fallback_current(run, holds)
     time_s = np.asarray(run.time, dtype=float)
     potential = np.asarray(run.potential, dtype=float)
     segments: list[CPSegment] = []
     for index, (start, end, direction) in enumerate(_segment_windows(run)):
-        current, warning = _segment_current(run, direction, fallback)
+        current, warning = _segment_current(run, direction)
         if warning and warning not in warnings:
             warnings.append(warning)
         segment = CPSegment(
@@ -672,8 +656,7 @@ def _pair_cycles(segments: list[CPSegment]) -> tuple[list[tuple[CPSegment, CPSeg
             continue
         if pending is None:
             continue
-        if segment.valid:
-            cycles.append((pending, segment))
+        cycles.append((pending, segment))
         pending = None
     if pending is not None:
         warnings.append("末尾充电段没有对应的放电段，未计入循环")
@@ -692,11 +675,73 @@ def _area_cm2(run: CPRun) -> float | None:
     return None
 
 
+def _cycle_completeness(charge: CPSegment, discharge: CPSegment, run: CPRun) -> tuple[str, str]:
+    metadata = run.metadata
+    mode = (metadata.switch_polarity or "").strip().casefold()
+    if mode == "time":
+        for segment, duration in ((charge, metadata.anodic_time_s), (discharge, metadata.cathodic_time_s)):
+            if duration is None or not np.isfinite(duration) or duration <= 0:
+                return "unconfirmed", "缺少对应方向的切换时长"
+            steps = np.diff(segment.time_s)
+            step = float(np.median(steps[steps > 0])) if np.any(steps > 0) else 0.0
+            if abs(segment.duration_s - duration) > max(1e-9, 1.01 * step):
+                return "partial", "活动段未达到设定切换时长"
+        return "complete", ""
+
+    high, low = metadata.high_e, metadata.low_e
+    if (high is None or low is None or not np.isfinite(high) or not np.isfinite(low)
+            or high <= low or mode not in ("", "potential")):
+        return "unconfirmed", "缺少有效的切换协议或电位限值"
+    # A switch between stored samples may leave the nearest sample short of the limit.
+    tolerance = max(0.001, 0.005 * (high - low))
+    if charge.index == 0:
+        start_steps = abs(np.diff(charge.potential_V[:5]))
+        start_tolerance = min(float(np.median(start_steps)) * 1.05, .05 * (high - low)) if start_steps.size else 0.0
+        if abs(charge.start_potential_V - low) > max(tolerance, start_tolerance):
+            status = "partial" if mode == "potential" else "unconfirmed"
+            return status, f"首个充电段未从 {low:g} V 开始，未纳入完整循环统计"
+    for segment, limit in ((charge, high), (discharge, low)):
+        approach = segment.potential_V[-5:]
+        steps = abs(np.diff(approach))
+        sample_tolerance = min(float(np.median(steps)) * 1.05, .05 * (high - low)) if steps.size else 0
+        if abs(segment.end_potential_V - limit) > max(tolerance, sample_tolerance):
+            status = "partial" if mode == "potential" else "unconfirmed"
+            return status, f"段末未达到 {limit:g} V，未纳入完整循环统计"
+    return "complete", ""
+
+
+def _estimate_ir_drop(charge: CPSegment, discharge: CPSegment, run: CPRun) -> float:
+    if not charge.valid or not discharge.valid or charge.hold is not None or run.metadata.high_hold_s:
+        return float("nan")
+    switch = float(charge.time_s[-1])
+    # Omit the shared turning sample. Bracket the switch using points on the
+    # known active-current portions on each side.
+    lines = []
+    for time, potential in (
+        (charge.time_s[-5:-1], charge.potential_V[-5:-1]),
+        (discharge.time_s[1:5], discharge.potential_V[1:5]),
+    ):
+        if (time.size < 3 or not np.isfinite(time).all() or not np.isfinite(potential).all()
+                or np.any(np.diff(time) <= 0)):
+            return float("nan")
+        offset = time - switch
+        slope, intercept = np.polyfit(offset, potential, 1)
+        residual = np.max(abs(potential - (slope * offset + intercept)))
+        if residual > max(1e-6, 0.08 * np.ptp(potential)):
+            return float("nan")
+        lines.append((intercept, residual))
+    drop = lines[0][0] - lines[1][0]
+    noise = max(1e-9, 3 * (lines[0][1] + lines[1][1]))
+    return float(max(0, drop)) if drop >= -noise else float("nan")
+
+
 def _build_cycle(index: int, charge: CPSegment, discharge: CPSegment, run: CPRun) -> CPCycle:
-    charge_capacity = charge.capacity_C
-    discharge_capacity = discharge.capacity_C
-    charge_with_holds = charge.capacity_with_holds_C
-    discharge_with_holds = discharge.capacity_with_holds_C
+    completeness, cycle_warning = _cycle_completeness(charge, discharge, run)
+    complete = completeness == "complete"
+    charge_capacity = charge.capacity_C if complete else np.nan
+    discharge_capacity = discharge.capacity_C if complete else np.nan
+    charge_with_holds = charge.capacity_with_holds_C if complete else np.nan
+    discharge_with_holds = discharge.capacity_with_holds_C if complete else np.nan
     efficiency = (
         discharge_capacity / charge_capacity * 100.0
         if np.isfinite(charge_capacity)
@@ -725,7 +770,7 @@ def _build_cycle(index: int, charge: CPSegment, discharge: CPSegment, run: CPRun
         if area_cm2 and np.isfinite(discharge_with_holds)
         else float("nan")
     )
-    energy_J = discharge.energy_J
+    energy_J = discharge.energy_J if complete else np.nan
     energy_Wh = energy_J / 3600.0 if np.isfinite(energy_J) else float("nan")
     specific_energy = (
         energy_Wh / (mass_g * 1e-3)
@@ -742,16 +787,7 @@ def _build_cycle(index: int, charge: CPSegment, discharge: CPSegment, run: CPRun
         if np.isfinite(energy_J) and np.isfinite(discharge_capacity) and discharge_capacity > 0
         else float("nan")
     )
-    # The first discharge points are still on the shared turning plateau.  Use
-    # the largest initial potential step as the current-reversal IR drop.
-    ir_drop = float("nan")
-    if discharge.potential_V.size >= 2 and charge.potential_V.size >= 1:
-        early = max(3, min(discharge.potential_V.size - 1, int(discharge.potential_V.size * 0.05)))
-        dt = np.diff(discharge.time_s[: early + 1])
-        dv = np.abs(np.diff(discharge.potential_V[: early + 1]))
-        valid = np.isfinite(dt) & (dt >= 0) & np.isfinite(dv)
-        if np.any(valid):
-            ir_drop = float(np.nanmax(dv[valid]))
+    ir_drop = _estimate_ir_drop(charge, discharge, run) if complete else np.nan
     return CPCycle(
         index=index,
         charge=charge,
@@ -775,6 +811,8 @@ def _build_cycle(index: int, charge: CPSegment, discharge: CPSegment, run: CPRun
         power_W_kg=power,
         mean_discharge_potential_V=mean_potential,
         ir_drop_V=ir_drop,
+        completeness=completeness,
+        cycle_warning=cycle_warning,
         areal_capacity_with_holds_C_cm2=areal_with_holds,
         areal_capacity_with_holds_mAh_cm2=(
             areal_with_holds / 3.6 if np.isfinite(areal_with_holds) else float("nan")
@@ -790,8 +828,12 @@ def analyze_cp_run(run: CPRun, *, force: bool = False) -> CPRunSummary:
     pairs, pair_warnings = _pair_cycles(segments)
     warnings.extend(pair_warnings)
     cycles = [_build_cycle(index + 1, charge, discharge, run) for index, (charge, discharge) in enumerate(pairs)]
+    warnings.extend(f"Cycle {cycle.index}：{cycle.cycle_warning}" for cycle in cycles if cycle.cycle_warning)
+    unavailable_ir = sum(cycle.valid and not np.isfinite(cycle.ir_drop_V) for cycle in cycles)
+    if unavailable_ir:
+        warnings.append(f"{unavailable_ir} 个循环的电流切换电压差无法可靠估算，IR 降留空")
     completed = sum(1 for segment in segments if segment.hold is not None)
-    if not cycles:
+    if not any(cycle.completeness == "complete" for cycle in cycles):
         warnings.append("未找到完整的“充电→放电”循环，无法计算 GCD 容量")
     summary = CPRunSummary(
         cycles=cycles,

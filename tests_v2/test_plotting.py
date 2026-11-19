@@ -197,8 +197,58 @@ def test_contribution_vs_rate_bar_axes(synthetic_cv_runs):
     ax = figure.axes[0]
     assert ax.get_ylim() == (0.0, 100.0)
     assert ax.get_xlabel().startswith("Scan rate")
-    assert ax.get_ylabel() == "Contribution (%)"
+    assert ax.get_ylabel() == "Contribution (% of fitted charge)"
     assert len(ax.patches) == 6
+    cap, diff = ax.containers[:2]
+    assert cap[0].get_x() == diff[0].get_x()
+    assert np.isclose(cap[0].get_y(), diff[0].get_height())
+
+    spec.analysis_options["dunn_fraction_basis"] = "measured"
+    render_plot(figure, dataset, spec, BUILTIN_PRESETS["daily"])
+    cap, diff = figure.axes[0].containers[:2]
+    assert cap[0].get_x() < diff[0].get_x()
+    assert all(bar.get_y() == 0 for bar in cap)
+
+
+def test_duplicate_rates_show_points_without_fit_or_inline_warning(synthetic_cv_runs):
+    from cvanalysis.domain.models import Dataset
+
+    for run in synthetic_cv_runs:
+        run.metadata.scan_rate = .1
+        run.summary.scan_rate = .1
+    dataset = Dataset(cv_runs=synthetic_cv_runs)
+    for kind in ("cv_bvalue", "cv_trasatti"):
+        figure = Figure()
+        spec = PlotSpec(kind, [run.run_id for run in synthetic_cv_runs], target_voltage=.5)
+        diagnostics = render_plot(figure, dataset, spec, BUILTIN_PRESETS["daily"])
+        assert any("两个不同扫速" in message for message in diagnostics)
+        assert len(figure.axes[0].lines) == 1
+        assert len(figure.axes[0].lines[0].get_xdata()) == 3
+        assert not figure.axes[0].texts
+
+
+def test_dunn_stacked_bars_preserve_signed_heights_and_keep_warnings_outside(synthetic_cv_runs, monkeypatch):
+    from cvanalysis.analysis.cv import DunnScanRateResult
+    from cvanalysis.plotting import cv_renderer
+
+    warning = "拟合分量异号"
+    result = DunnScanRateResult(
+        np.array([.01, .02, .05]), np.array([.2, -.5, 1.3]), np.array([1.1, 1.5, -.3]),
+        mean_r2=.95, warnings=[warning], potential_window=(0, 1), fraction_basis="measured",
+    )
+    monkeypatch.setattr(cv_renderer, "dunn_fraction_vs_scan_rate", lambda *args, **kwargs: result)
+    dataset = type("D", (), {"cv_runs": synthetic_cv_runs, "eis_runs": []})()
+    spec = PlotSpec("cv_contribution_vs_rate", [run.run_id for run in synthetic_cv_runs],
+                    analysis_options={"dunn_fraction_basis": "measured", "dunn_bar_layout": "stacked"})
+    figure = Figure()
+    assert warning in render_plot(figure, dataset, spec, BUILTIN_PRESETS["daily"])
+    ax = figure.axes[0]
+    cap, diff = ax.containers[:2]
+    assert np.allclose([bar.get_y() for bar in cap], [110, 0, 0])
+    assert np.allclose([bar.get_height() for bar in cap], [20, -50, 130])
+    assert np.allclose([bar.get_y() for bar in diff], [0, 0, 0])
+    assert np.allclose(ax.get_ylim(), [-50, 150])
+    assert all(warning not in item.get_text() for item in ax.texts)
 
 
 def test_contribution_current_plot_axes(synthetic_cv_runs):
@@ -217,7 +267,10 @@ def test_contribution_current_plot_axes(synthetic_cv_runs):
     ax = figure.axes[0]
     assert ax.get_xlabel() == "Potential (V)"
     assert ax.get_ylabel().startswith("Current")
-    assert len(ax.lines) >= 3
+    assert [line.get_label() for line in ax.lines[:4]] == ["Measured", "Dunn fit", "Capacitive", "Diffusive"]
+    vertices = ax.collections[0].get_paths()[0].vertices
+    assert np.any(vertices[:, 1] == 0)
+    assert np.isclose(vertices[:, 1].max(), np.max(ax.lines[2].get_ydata()))
 
 
 def test_multi_run_overlay_legend_is_per_run(synthetic_cv_runs):

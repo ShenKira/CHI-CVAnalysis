@@ -65,7 +65,7 @@ def test_concat_sequential_draws_one_line_per_branch(synthetic_cp_run):
         show_efficiency=True,
     )
     figure, warnings = _draw(spec, [first, second])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
 
     capacity_ax, efficiency_ax = figure.axes
     # One merged discharge line, one merged charge line, one merged CE line.
@@ -101,7 +101,7 @@ def test_concat_cumulative_uses_full_cycle_offsets_and_leaves_gaps(synthetic_cp_
         capacity_series="discharge",
     )
     figure, warnings = _draw(spec, [first, second])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
 
     line = figure.axes[0].lines[0]
     # First run 1..2, then the full first-run count plus second-run cycle 2.
@@ -124,7 +124,7 @@ def test_concat_unified_reference_from_second_run_cycle(synthetic_cp_run, series
         capacity_percent_reference_cycle=2,
     )
     figure, warnings = _draw(spec, [first, second])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
 
     reference_x = len(first.summary.cycles) + 2
     lines = figure.axes[0].lines
@@ -189,7 +189,7 @@ def test_unified_reference_works_without_concatenation(synthetic_cp_run):
         "capacity_percent_reference_cycle": 1,
     })
     figure, warnings = _draw(spec, [run])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     assert figure.axes[0].lines[0].get_ydata()[0] == pytest.approx(100.0)
     assert "%" in figure.axes[0].get_ylabel()
 
@@ -206,7 +206,7 @@ def test_concat_custom_legend_text_overrides_defaults(synthetic_cp_run):
         cp_legend_efficiency="Merged CE",
     )
     figure, warnings = _draw(spec, [first, second])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     legend = figure.axes[0].get_legend()
     assert legend is not None
     assert [text.get_text() for text in legend.get_texts()] == [
@@ -223,7 +223,7 @@ def test_single_run_absolute_drawing_is_unchanged(synthetic_cp_run):
         "cp_display_unit": "mAh",
     })
     figure, warnings = _draw(spec, [run])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     lines = figure.axes[0].lines
     assert len(lines) == 2
     expected_x = [cycle.index for cycle in run.summary.cycles]
@@ -262,7 +262,7 @@ def test_manual_and_cycle_percent_modes_work_with_concat(synthetic_cp_run, mode)
         **options,
     )
     figure, warnings = _draw(spec, [first, second])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     line = figure.axes[0].lines[0]
     assert len(line.get_xdata()) == 3
     if mode == "manual":
@@ -285,7 +285,7 @@ def test_concat_cycle_reference_can_lie_outside_displayed_range(synthetic_cp_run
         capacity_percent_cycle=2,
     )
     figure, warnings = _draw(spec, [first, second])
-    assert not warnings
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     line = figure.axes[0].lines[0]
     # First run cycles 1-2 plus second run cycle 1 only.
     np.testing.assert_allclose(line.get_xdata(), [1, 2, 3])

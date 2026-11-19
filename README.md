@@ -16,7 +16,7 @@
 - **I‑T 图例字段**：可使用 `{IT_Potential}`、`{IT_Run_Time}`、`{IT_Sample_Interval}`、`{IT_Quiet_Time}` 和 `{Points}`；输入 `{ }` 可让该曲线不显示图例条目，留空输入框则继续继承默认模板。
 - **当前图选项浮窗**：双击右下角“当前图”标题可在独立窗口编辑，关闭窗口或点击原位置的“返回工作区”后恢复面板；尚未应用的输入保留。
 - **长文件名处理**：文件名超过显示上限时自动缩短；同类型文件名相似且较长时，整组使用 `#文件序号 + 电位/扫速` 紧凑图例，避免 1.5 V / 2.5 V 被截成同名。完整文件名、路径和扫速/窗口仍显示在左侧详情区。
-- **循环级控制**：数据集树中可勾选文件或单个循环，决定新建图的数据范围；已有图保留各自的数据选择。
+- **循环级控制**：数据集树中可勾选文件或单个循环，实时更新当前图。每个标签页独立保存文件和循环选择。
 - **每图独立数据选择**：画布右键“本图数据与图例...”或“工具 → 当前图数据与图例...”可选择该图绘制的文件、CV 循环及图例模板。
 - **图例模板与别名**：可为数据设置默认别名模板（如 `{file_n}-{cycle_n}`），也可在当前图单独覆盖，或为单个数据设置“图例/别名”。模板支持文件序号 `{file_n}`、文件内原始循环号 `{cycle_n}`、人工别名 `{Alias}`，以及 `{File_Name}`、`{Scan_Rate}`、`{CV_Window}`、`{Cycle_Number}`、`{Low_Freq}` 等字段。左树“图例/别名”列显示人工别名或自动紧凑/缩写结果；模板优先于别名。CV 叠加图默认每个数据的循环图例上限为 10；超过时按连续循环范围自动合并（例如 500 个循环显示为 `Cycle 1-50`、`Cycle 51-100`……），可在“分析参数”的“循环图例上限”中调整，设为 0 可恢复逐循环图例。
 - **可拖拽布局与列宽**：数据集、左下角 CV/EIS/CP 结果表、日志和右侧当前图设置之间均可拖动分隔条；数据树、结果表和每图数据对话框的所有列均可拖动，双击列边界或右键表头可自动适配。窗口几何、分隔比例和列宽会被记住。
@@ -66,7 +66,7 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 
 ### 2.1 版本与升级
 
-- 当前版本 **v2.1.0**：Liquid Glass 界面、CP 多文件容量拼接与统一 100% 参考、LSV/I-T 参考归一化、I-T 多条参考线及标签/图例管理、安全变量格式与 MathText/换行，以及统一 Windows 应用图标。
+- 当前版本 **v2.2.0**：Dunn 支持拟合与实测两种 100% 基准及并排/堆叠柱形，数据树勾选与当前图实时联动；修正 b 值/Trasatti 扫速校验、Trasatti 总电荷外推、CV 逐循环电荷、CP/GCD 完整性与 IR 降、EIS 快速几何估计；分析与绘图警告移到非模态弹窗和底栏红字日志。2.1.0 的 Liquid Glass 界面、CP 多文件拼接、LSV/I-T 参考归一化与安全变量格式继续保留。
 - 文本模板支持 `{value:.2f}` 等受限格式，指定精度时保留末尾零；先替换已知变量，再解析 `$...$` 数学公式和公式外的 `\n`。不执行 Python 表达式或外部 TeX。
 - 已有 v1 克隆：没有本地修改时执行 `git pull --ff-only`；有修改时先提交到自己的分支或备份，再更新；不确定时直接重新 clone。
 - 旧 GUI 已移除；v1 `config.json` 会自动迁移为 v2 配置。
@@ -75,13 +75,16 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 
 1. **导入**：点击“导入数据文件”，可多选 CV/EIS/CP 文件。坏文件会记录到日志，不影响其他文件。
 2. **查看数据集**：左侧数据集树显示短文件名、图例/别名、扫速/频率/电流、窗口/频率、循环/点数和状态；平均电容、Rs、容量等分析指标只在左下结果表显示。完整文件名/路径和细节显示在树下方。
-   - 勾选文件/循环决定新建图的数据范围；父节点显示全选/部分选中/未选三态。绘图优先使用树中选中行，没有选中行时使用勾选数据。已有图的数据选择保持独立。Ctrl/Shift 多选；支持全选、删除选中、清空数据。
+   - 勾选文件/循环会更新当前图。切换标签恢复该图的勾选，父节点显示全选/部分选中/未选三态。其他类型的文件仍可点击查看详情、通过右键新建对应图表。新建图优先使用相符的选中行，否则使用相应的勾选范围。Ctrl/Shift 多选；支持全选、删除选中、清空数据。
+   - 只有一张图时，新导入且类型匹配的文件自动加入该图。有多张图时，新文件默认不勾选，可在任意标签页单独加入。
    - 双击文件或右键“绘制”会创建一个只包含该数据的独立图。
    - 右键还可设置电极面积/活性物质质量、设置数据图例模板、设置图例/别名或删除数据。双击“图例/别名”列也可编辑。
    - 可拖动一个或多个文件，在同一 CV/EIS/CP 分组内重新排序；勾选、循环选择和当前图的数据选择保留。绘图顺序与文件序号同步更新，顺序随项目保存。
    - 拖动树和下方详情区之间的分隔条可调整占比。
    - 左下 CV 结果和 CP / GCD 结果表中，双击文件/数据行可展开每个循环的电容、C/A、C/m、容量、库伦效率和 IR 降；再次双击收起。
 3. **每图选择数据 / 设置**：右键画布选择“本图数据与图例...”可勾选该图的文件和 Cycle、设置图例模板；也可从“工具 → 当前图数据与图例...”进入。分析与论文选项位于右下角“当前图”面板；画布右键提供样式/颜色/轴标签、预设、图片比例、复制、导出和恢复默认。
+
+分析与绘图警告显示在非模态弹窗及底部中间的红字日志。预览、复制和导出的图像仅包含数据和图注。
 4. **设置图例模板/别名**：在数据集树右键选择“设置数据图例模板...”或“设置图例/别名...”，也可使用“工具”菜单。模板优先于别名；模板中可用 `{Alias}` 引用别名。例如：
    - `{CV_Voltage}-{Cycle_Number}` → `1.5V-1`、`1.5V-2` ...
    - `{Sample_Name}-{Scan_Rate}` → `样品A-0.01V/s`
@@ -133,15 +136,17 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 #### CV
 
 - 循环分割：优先使用电位拐点 + prominence 过滤的稳健算法；设置中可切换为 v1 兼容算法。首个循环若从非极限电位起始会被标记为不完整并警告，但默认仍参与统计。
-- 循环面积：正扫/反扫分支插值后梯形积分。
+- 循环面积在正反扫实测重叠区间积分。重复转折电位保留对应支路的实测点，单个共用转折点归入进入该转折点的支路。
 - 循环电容：`C = Area / (2 × scan_rate × ΔV)`，与 v1 公式一致。
 - 统计：有效循环平均、标准差、变异系数。默认按偏离程度固定裁剪 1 个循环（旧版兼容）；设置中可改为 z-score 阈值模式，只排除 `|z|` 超过阈值的循环。
 - 固定电位电流：在目标电位处对正扫/反扫分支插值，取循环中位数。
-- b 值：`log|i| = b log v + log a`，支持 2 个及以上扫速，建议至少 3 个。当前图可切换电流来源：正扫支路、反扫支路或旧版平均绝对电流（默认，兼容旧项目）。
-- Trasatti：`q = q_cap + k v^(-1/2)`，其中 `q = C × 实际积分窗口宽度`（缺失时回退文件窗口）。不同文件窗口不一致时只警告，不静默丢弃；同时给出 `q–v^(1/2)` 外推的 `q_total` 和 `q_outer/q_total`（保留旧的低扫速占比字段）。
-- Dunn：对正扫支路在共同电位窗口逐点拟合 `i(V) = k1 v + k2 v^(1/2)`，以 `i/√v` 对 `√v` 做标准线性化回归。两个 Dunn 图共用按电容/扩散分量绝对面积之和计算的占比。
-  - “Dunn 电流分解”图的横轴是电位，纵轴是电流（总电流/电容电流/扩散电流），指定扫速下查看。
-  - “贡献占比-扫速”图积分共同电位窗口内两个拟合分量的绝对面积，再按两者之和归一化为互补的 0–100% 堆叠柱。若两个拟合分量在部分电位相互抵消，这表示分量幅值构成，不等同于净实测电流面积的百分比。
+- b 值按 `log|i| = b log v + log a` 回归。新图默认正扫，当前图可切换反扫或正反扫幅值平均。旧图保留以前的选项。不同有效扫速少于两个时只显示数据点。
+- Trasatti 先对每个有效循环算电荷，再汇总同一文件。同扫速数据取平均，每个不同扫速等权回归。对 `q–1/√v` 外推得到 `q_outer`，对 `1/q–√v` 外推后取截距倒数得到 `q_total`。图中分别注明相对于外推总电荷和最低实测扫速电荷的比值。电位窗口检查比较实际积分上下限。
+- Dunn 分析在当前图设置中选择正扫（默认）或反扫。两张图都在所选支路的共同电位窗口上，以 `i/√v` 对 `√v` 逐电位做线性回归，斜率为 `k1`，截距为 `k2`。每个文件取有效选中循环的电流中位数，同扫速文件按所选单位归一化后等权平均，每个不同扫速参与一次拟合。[Wang 等，式（7）–（8）与图 7](https://doi.org/10.1021/jp074464w)
+  - “Dunn 电流分解”叠加实测总电流、拟合总电流、电容和扩散分量。阴影覆盖零线与电容电流之间的区域。选取两次测量之间的扫速时仅显示预测曲线。
+  - 创建任一 Dunn 图时，弹窗可选择整张图的 100% 基准。默认用两个拟合分量的净电荷之和，另一模式用该扫速的实测支路净电荷。当前图设置中可切换并保存。各分量均按同一电位窗口积分 `Q = ∫i dt`，保留电流符号。分量异号时可能出现负值或超过 100%，所选分母接近抵消时留空。非实测扫速仅拟合模式可以计算占比。
+  - “贡献占比-扫速”可在当前图设置中选择并排、堆叠或随基准自动。自动模式下，拟合基准默认堆叠，扩散在下、电容在上。实测基准默认并排。堆叠时异号分量分别在零线两侧绘制。实测基准下两项合计偏离 100% 反映积分后的拟合偏差。电容项包含双电层和可能的赝电容响应。
+  - Dunn 方法版本 4 将基准随图保存。没有基准字段的历史图默认以拟合净电荷为基准。需复现版本 3 时选择实测模式。更早版本以两分量绝对面积之和归一化，分量异号时其物理含义也不同。
 
 电容–扫速拟合模式含义：一次函数在原始数据上拟合 `C = m·v + b`，轴类型只改变显示；坐标直线会按所选 X/Y 轴变换拟合，使最终图像中的线保持直线；幂律拟合 `C = a·vⁿ`。拟合方程的文本模板可使用 `{unit}` 引用当前电容显示单位，默认方程不强制增加系数单位。拟合图例按最终图形显示为 `Fitted Line` 或 `Fitted Curve`。各轴“自动”模式在数据全为正且范围跨 20 倍以上时选择对数轴，其余使用线性轴；纵轴自动模式还会检查误差棒下界。选项中会显示当前自动解析结果。幂律与对数-对数轴下的坐标直线数学上等价。
 
@@ -149,8 +154,8 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 
 #### EIS
 
-- Rs：高频端最小实部估计；拟合时作为独立参数。
-- Rct：半圆峰值 `2 × max(-Z'')` 的几何估计，或由拟合给出。
+- Rs 从高频端的有效实部估计，或由指定电路拟合给出。
+- Rct 和几何 Cdl 需要频段覆盖近似理想单弧两侧。其他谱形的几何参数留空，可通过适用的电路拟合估计。
 - f_peak：`-Z''` 最大值对应频率。
 - Cdl：`1 / (2π f_peak Rct)`（几何估计）；CPE 模型使用有效电容换算。
 - 拟合模型：
@@ -158,7 +163,7 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
   - `Rs-(Rct||C)`：理想 RC 半圆
   - `Rs-CPE`：阻塞电极/超电容，`Z = Rs + 1/(Q(jω)^n)`
   - `Rs-C`：理想串联电容
-- 自动模型：检测到完整半圆时推荐 `Rs-(Rct||CPE)`，否则推荐 `Rs-CPE`。
+- 自动模型在检测到覆盖两侧的单弧时选用 `Rs-(Rct||CPE)`。频段或弧形不足时由用户选择模型或调整频段。
 - 拟合使用相对残差和软 L1 损失，报告 R²、RMSE、参数标准误和警告。低频扩散尾部明显时，建议限定拟合频率范围或使用 `Rs-CPE`。
 - EIS 阻抗只支持面积归一化（Ω·cm² 系列）；选择质量归一化会回退原始阻抗并给出警告。面积归一化时图内 Rs/Rct 注释同样换算为 Ω·cm²。
 
@@ -170,7 +175,7 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 - GCD 循环：充电段后紧邻的放电段组成一个循环；开头单独放电段不计入。
 - 容量：默认 `Q = |I| × t` 只统计恒流活动段；开启“容量计入恒压保持段”后加上保持段电流积分。
 - 比容量：`Q_dis / m`（换算为 mAh/g）；面积容量：`Q_dis / A`（mAh/cm²）；库仑效率：`Q_dis / Q_chg × 100%`。
-- IR 降：放电初段的最大电位台阶；能量：`∫V·I dt`，可换算 Wh/kg 与 W/kg。
+- IR 降由电流切换两侧的局部电压趋势外推到同一时刻估算。保持段、采样不足或外推不可靠时留空。缺少某方向恒流设定时，相关容量和效率留空。循环完整性按电位限值或定时时长检查；部分或未确认循环保留编号与状态，并排除在完整循环统计之外。能量按活动段的 `∫V·I dt` 计算，可换算 Wh/kg 与 W/kg。
 - 保持段记录不足或无法匹配时只显示警告，不强行补全；建议在图中结合原始电位-时间曲线核对。
 
 ### 6. 兼容性与清理说明
@@ -208,11 +213,11 @@ build.bat           # Nuitka 打包脚本
 
 ### 8. 已知限制
 
-- EIS 自动 Rct/Cdl 是几何估计；非理想半圆应以拟合结果为准。
-- `Rs-CPE` 的 Rs 在缺少足够高频数据时可能不可辨识，界面会回退到高频最小实部并给出警告。
+- EIS 几何 Rct/Cdl 只适用于覆盖两侧的近似理想单弧。选择等效电路拟合时，结果表和 CSV 标明模型及拟合频段。
+- `Rs-CPE` 的 Rs 在缺少足够高频数据时可能不可辨识。拟合 Rs 接近零时保留原拟合值并提示核对模型及频段，几何 Rs 单独按高频有效实部估计。
 - CP 默认按“电位上升=充电”解释；负电极半电池的充电/放电标签和库仑效率会反过来，当前版本不提供方向切换 UI。
 - EIS 阻抗不支持质量归一化；选择后会回退原始阻抗并警告。
-- Dunn/Trasatti 需要多个扫速和一致电压窗口；不一致时界面会警告，Trasatti 的 q 使用实际积分窗口宽度。
+- Dunn/Trasatti 需要多个扫速。Dunn 使用所选支路的共同实测窗口，Trasatti 按各有效循环的实测面积算电荷，再检查不同数据的积分上下限。
 - EIS 拟合对频率范围敏感；拟合前建议先检查 Nyquist/Bode 形态并关注 R²/RMSE 警告。
 
 ### 9. License
@@ -240,13 +245,13 @@ Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Bu
 ### Version and upgrade
 
 - Starting with v2.0.0, `main` contains the v2 workspace; v1 is archived in the `v1-archive` branch and tags `v1.1`, `v1.2.3`, `v1.3.0`.
-- Current release **v2.1.0** adds the Liquid Glass UI, multi-file CP capacity plots and unified references, LSV/I-T reference normalization, multiple I-T reference lines with label/legend controls, safe variable formatting with MathText/newlines, and a shared Windows application icon.
+- Current release **v2.2.0** adds Dunn 100% basis selection (fitted vs measured) with side-by-side/stacked bars, live dataset-checkbox sync with the current plot, corrected b-value/Trasatti scan-rate checks and Trasatti total-charge extrapolation, CV per-cycle charge, CP/GCD completeness and IR drop, EIS fast geometry estimates, and warnings moved to a non-modal dialog plus the bottom red log. The 2.1.0 Liquid Glass UI, multi-file CP concatenation, LSV/I-T reference normalization and safe variable formatting remain.
 - Existing v1 clones without local changes can run `git pull --ff-only`; commit or back up local changes first, or simply re-clone.
 - The legacy GUI is removed; v1 `config.json` is migrated automatically.
 
 ### Main capabilities
 
-- Multi-file CV/EIS/CP import with shortened filenames, full-file details, per-run/per-cycle visibility, multi-select, delete-selected and clear-all.
+- Multi-file CV/EIS/CP import with shortened filenames and file details. Dataset checkboxes update the active plot, and each tab restores its own file and cycle selection. New imports are unchecked when several plots are open.
 - CV: capacitance vs scan rate, current at fixed potential, b-value, Trasatti charge separation, Dunn current decomposition, and contribution percentage bars vs scan rate.
 - Normalization by electrode area or active mass.
 - EIS: Rs/Rct/f_peak/Cdl/τ estimates, Nyquist/Bode plots, frequency filtering.
@@ -260,6 +265,7 @@ Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Bu
 - Top/right spine ticks can be disabled independently while keeping the spines visible; hiding a spine also hides its ticks (major and minor).
 - Plot-canvas context menu: detect used colors (line colors plus marker fill/edge, text colors last), edit current-plot colors, canvas aspect ratio, element styles, or fit the image to the tab; copy the current plot as PNG or as an SVG vector image for Word/PowerPoint/Illustrator; contextual controls include bar width and opacity.
 - `.cvproj` projects with `Ctrl+S` quick save and `Ctrl+Shift+S` Save As, PNG/PDF/SVG/TIFF export, CSV summary export.
+- Analysis and rendering diagnostics appear in a non-modal dialog and in red in the workspace log. Plot previews, clipboard images and image exports contain data and plot annotations.
 - `Ctrl+W` closes the active plot tab without closing the project; `Ctrl+Shift+W` closes the current project and returns to an empty workspace, preserving application layout/settings and prompting for unsaved changes.
 - High-DPI UI with an adjustable 0.8-1.6 interface scale. The GUI uses a token-based design system with soft rounded controls, pill-shaped large primary actions, JSON colour themes and Qt Chinese translations; see [DESIGN.md](DESIGN.md).
 
@@ -271,9 +277,10 @@ Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Bu
 
 ### Scientific notes
 
-- CV capacitance uses `C = Area / (2 × scan_rate × ΔV)`, matching v1.
-- Scan-rate analyses require multiple files with compatible potential windows. Trasatti warnings are additive; legacy low-rate fractions remain available.
-- b-value current source defaults to the legacy average absolute current; choose forward/reverse branch explicitly for fixed-potential single-branch analysis.
+- CV integrates the measured overlap of the two branches. The mean branch charge is `Area / (2 × scan_rate)` per cycle. Trasatti fits `q` against `1/√v` for the outer charge and `1/q` against `√v` for reciprocal total charge. The measured low-rate ratio is labelled separately.
+- New b-value plots use the forward sweep by default. Existing projects can retain the average absolute current of both branches. b-value and Trasatti fits require at least two distinct valid rates.
+- Dunn fractions use signed component charge and can be referenced to fitted or measured net charge. Automatic layout stacks the fitted fractions and groups the measured fractions.
 - CP charge/discharge direction defaults to potential-rise = charge and is not configurable in the UI; negative-electrode half-cells require external sign handling.
 - EIS impedance supports area normalization only; mass normalization falls back to raw impedance with a warning.
-- EIS geometric metrics are estimates; use fitting for non-ideal spectra and inspect fit quality.
+- CP uses the current setpoint for each direction. Missing current, unconfirmed cycle completeness and an unresolved current-switch voltage step can leave metrics blank in results and CSV.
+- EIS reports geometric Rct/Cdl only for approximately ideal arcs with both sides covered. Fitted metrics identify the circuit and frequency range.

@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal
 
 
 class QtLogEmitter(QObject):
-    message = Signal(str)
+    message = Signal(str, int)
 
 
 class QtLogHandler(logging.Handler):
@@ -22,7 +22,7 @@ class QtLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            self.emitter.message.emit(self.format(record))
+            self.emitter.message.emit(self.format(record), record.levelno)
         except Exception:
             pass
 

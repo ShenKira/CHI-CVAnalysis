@@ -10,6 +10,7 @@ from cvanalysis.analysis.cp import analyze_cp_run
 from cvanalysis.analysis.cv import analyze_cv_run
 from cvanalysis.analysis.eis import EISMetrics, analyze_eis, filter_eis_run
 from cvanalysis.analysis.fitting import EISFitResult, fit_eis_model
+from cvanalysis.domain.errors import FitError
 from cvanalysis.domain.models import CVRun, Dataset, EISRun, ElectrodeParams
 
 
@@ -49,6 +50,7 @@ def refresh_analysis(dataset: Dataset, settings: AnalysisSettings | None = None,
     for run in dataset.eis_runs:
         try:
             run.summary = analyze_eis(run)
+            warnings.extend(f"{run.display_name}: {message}" for message in run.summary.warnings)
         except Exception as exc:  # noqa: BLE001 - keep importing other files
             message = f"{run.display_name}: EIS 分析失败: {exc}"
             run.summary = None
@@ -116,6 +118,8 @@ def fit_eis_runs(
         model_for_run = model
         if model == "auto":
             model_for_run = analyze_eis(selected).recommended_model
+            if model_for_run is None:
+                raise FitError(f"{run.display_name}：当前频段无法自动识别可靠的单弧，请选择电路模型或调整频段")
         fits[run_id] = fit_eis_model(selected.freq, selected.z_real, selected.z_imag, model=model_for_run)
     return fits
 

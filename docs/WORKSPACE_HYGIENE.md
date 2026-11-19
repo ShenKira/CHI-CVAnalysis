@@ -41,7 +41,7 @@ CVAnalysis/
 └─ *.cvproj / config.json / themes.json / 用户图片
 ```
 
-一次性工作只放在 `.local/<日期>-<任务名>/`。任务结束后删除；需要长期保留的证据再移入 `.opencode_cache/<主题>/final/` 或正式文档目录。
+一次性工作使用 `.local/<日期>-<任务名>/`。任务结束后清理可再生文件。清理前先核对文档引用，本地分析复算和构建日志等保留项由 `.local/README.md` 索引。
 
 ## 4. 保留周期
 

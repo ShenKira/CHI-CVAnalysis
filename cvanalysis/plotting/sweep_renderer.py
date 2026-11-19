@@ -298,6 +298,9 @@ def draw(figure, dataset, spec, style, *, color_config=None):
     runs = [run for run in source if run.run_id in selected]
     figure.clear()
     ax = figure.add_subplot(111)
+    if not runs:
+        ax.set_axis_off()
+        return ["没有选择 LSV 数据" if kind == "lsv" else "没有选择 I-T 数据"]
     warnings = []
     prefix = "lsv" if kind == "lsv" else "it"
     display_mode = str(

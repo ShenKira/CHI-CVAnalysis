@@ -30,7 +30,8 @@ def test_cycle_segmentation_and_capacitance(cv_file_factory):
     assert summary.sd_capacitance_F == pytest.approx(0.0, abs=1e-12)
     for cycle in run.cycles:
         assert cycle.branch_up.shape[0] >= 2 and cycle.branch_down.shape[0] >= 2
-        assert cycle.area_C == pytest.approx(2e-5, rel=1e-6)
+        assert cycle.area_C == pytest.approx(2e-5 * cycle.integration_width_V, rel=1e-6)
+        assert cycle.integration_width_V < 1.0
 
 
 def test_scan_rate_points_and_b_value(synthetic_cv_runs):
@@ -134,12 +135,12 @@ def test_b_value_current_modes_use_requested_branch(cv_file_factory):
 def test_trasatti_ideal_capacitor(synthetic_cv_runs):
     points = collect_scan_rate_points(synthetic_cv_runs)
     result = trasatti_analysis(points)
-    assert all(point.integration_width_V == pytest.approx(1.0) for point in points)
+    expected = 1e-4 * points[0].integration_width_V
     # Ideal capacitor: all charge is capacitive, so the intercept equals the
     # charge at every scan rate and the diffusion slope is ~0.
-    assert result.q_capacitive_C == pytest.approx(1e-4, rel=1e-5)
+    assert result.q_capacitive_C == pytest.approx(expected, rel=1e-5)
     assert result.capacitive_fraction_low_rate == pytest.approx(1.0, abs=1e-5)
-    assert result.q_total_C == pytest.approx(1e-4, rel=1e-5)
+    assert result.q_total_C == pytest.approx(expected, rel=1e-5)
     assert result.capacitive_fraction_total == pytest.approx(1.0, abs=1e-5)
 
 
@@ -148,13 +149,60 @@ def test_trasatti_uses_actual_integration_width(synthetic_cv_runs):
 
     points = collect_scan_rate_points(synthetic_cv_runs)
     narrowed = [
-        replace(point, integration_width_V=0.5, voltage_window=1.0)
+        replace(point, integration_width_V=0.5, voltage_window=1.0, charge_C=None)
         for point in points
     ]
     result = trasatti_analysis(narrowed)
     assert result.charges_C == pytest.approx([5e-5] * len(narrowed))
     assert result.q_capacitive_C == pytest.approx(5e-5)
     assert result.q_total_C == pytest.approx(5e-5)
+
+
+def test_scan_rate_fits_reject_repeated_rates_and_use_reciprocal_total(synthetic_cv_runs):
+    from dataclasses import replace
+
+    points = collect_scan_rate_points(synthetic_cv_runs, target_voltage=.5)
+    duplicated = [replace(point, scan_rate=.1) for point in points]
+    with pytest.raises(AnalysisError):
+        fit_b_value(duplicated)
+    with pytest.raises(AnalysisError):
+        trasatti_analysis(duplicated)
+    samples = [
+        replace(point, charge_C=1 / (2 + 3*np.sqrt(point.scan_rate)))
+        for point in points
+    ]
+    assert trasatti_analysis(samples).q_total_C == pytest.approx(.5)
+    assert trasatti_analysis([*samples, samples[0], samples[0]]).q_total_C == pytest.approx(.5)
+    shifted = replace(points[0], integration_bounds_V=(.2, 1.2))
+    assert scan_window_warning([shifted, points[1]])
+
+
+def test_trasatti_averages_charge_before_aggregating_cycles(synthetic_cv_runs):
+    from copy import deepcopy
+
+    run = deepcopy(synthetic_cv_runs[0])
+    for cycle, cap, width in zip(run.cycles, (1., 3.), (1., 2.)):
+        cycle.capacitance_F = cap
+        cycle.integration_width_V = width
+        cycle.area_C = 2 * run.scan_rate * cap * width
+    run.summary = summarize_run(run, outlier_count=0)
+    point = collect_scan_rate_points([run])[0]
+    assert point.charge_C == pytest.approx(3.5)
+
+
+def test_cv_measured_duplicate_turn_keeps_both_branch_currents():
+    from cvanalysis.domain.models import CVMetadata, CVRun
+
+    volts = np.linspace(0, 1, 101)
+    measured = np.r_[np.ones_like(volts), -np.ones_like(volts)]
+    run = CVRun("test-turn", "test", np.r_[volts, volts[::-1]], measured, CVMetadata(
+        high_e=1, low_e=0, scan_rate=1, segment=2
+    ))
+    analyze_cv_run(run)
+    cycle = run.cycles[0]
+    assert cycle.branch_up[-1].tolist() == [1., 1.]
+    assert cycle.branch_down[-1].tolist() == [1., -1.]
+    assert cycle.integral_area_A_V == pytest.approx(2.)
 
 
 def test_trasatti_uses_lowest_rate_for_unsorted_points(synthetic_cv_runs):
@@ -245,7 +293,7 @@ def test_dunn_contributions_use_the_standard_transformed_regression():
     k1 = -0.2 + 0.1 * potential
     k2 = 0.8 - 0.15 * potential
     currents = rates[:, None] * k1 + np.sqrt(rates)[:, None] * k2
-    currents += np.asarray([0.0, 0.01, -0.006])[:, None] * np.cos(np.pi * potential)[None, :]
+    currents += np.asarray([0.0, 0.01, -0.006])[:, None] * (1 + np.cos(np.pi * potential))[None, :]
     runs = [
         SimpleNamespace(
             run_id=f"run-{index}",
@@ -255,18 +303,24 @@ def test_dunn_contributions_use_the_standard_transformed_regression():
         for index, (rate, row) in enumerate(zip(rates, currents))
     ]
 
-    result = dunn_fraction_vs_scan_rate(runs)
+    result = dunn_fraction_vs_scan_rate(runs, fraction_basis="measured")
 
     design = np.column_stack((np.sqrt(rates), np.ones_like(rates)))
     coefficients, *_ = np.linalg.lstsq(design, currents / np.sqrt(rates)[:, None], rcond=None)
-    capacitive = np.abs(coefficients[0][None, :] * rates[:, None])
-    diffusive = np.abs(coefficients[1][None, :] * np.sqrt(rates)[:, None])
+    capacitive = coefficients[0][None, :] * rates[:, None]
+    diffusive = coefficients[1][None, :] * np.sqrt(rates)[:, None]
     cap_area = np.trapezoid(capacitive, potential, axis=1)
     diff_area = np.trapezoid(diffusive, potential, axis=1)
-    expected = cap_area / (cap_area + diff_area)
+    measured_area = np.trapezoid(currents, potential, axis=1)
+    expected = cap_area / measured_area
     assert result.capacitive_fraction == pytest.approx(expected)
-    assert result.diffusive_fraction == pytest.approx(1.0 - expected)
-    single_rate = dunn_analysis(runs, selected_scan_rate=float(rates[1]))
+    assert result.diffusive_fraction == pytest.approx(diff_area / measured_area)
+    assert not np.allclose(result.diffusive_fraction + result.capacitive_fraction, 1)
+    assert any("异号" in warning for warning in result.warnings)
+    fitted_basis = dunn_fraction_vs_scan_rate(runs)
+    assert fitted_basis.capacitive_fraction == pytest.approx(cap_area / (cap_area + diff_area))
+    assert fitted_basis.diffusive_fraction + fitted_basis.capacitive_fraction == pytest.approx(np.ones(3))
+    single_rate = dunn_analysis(runs, selected_scan_rate=float(rates[1]), fraction_basis="measured")
     assert single_rate.capacitive_fraction == pytest.approx(result.capacitive_fraction[1])
     grid = np.linspace(float(potential[0]), float(potential[-1]), 200)
     sampled_currents = np.vstack([np.interp(grid, potential, row) for row in currents])
@@ -276,6 +330,48 @@ def test_dunn_contributions_use_the_standard_transformed_regression():
     ss_res = np.sum((transformed - transformed_prediction) ** 2, axis=0)
     ss_tot = np.sum((transformed - transformed.mean(axis=0)) ** 2, axis=0)
     assert result.mean_r2 == pytest.approx(np.mean(1.0 - ss_res / ss_tot))
+    assert single_rate.measured_current == pytest.approx(sampled_currents[1])
+
+
+def test_dunn_reverse_sweep_replicates_and_unmeasured_rate():
+    potential = np.linspace(0, 1, 9)
+    runs = []
+    for index, (rate, offset) in enumerate(((0.01, -0.01), (0.01, 0.01), (0.04, 0.0))):
+        down = np.full_like(potential, -(2 * rate + np.sqrt(rate)) + offset)
+        cycle = SimpleNamespace(valid=True, branch_down=np.column_stack((potential, down)),
+                                branch_up=np.column_stack((potential, rate * (potential - .5))))
+        runs.append(SimpleNamespace(run_id=str(index), cycles=[cycle], metadata=SimpleNamespace(scan_rate=rate)))
+    result = dunn_fraction_vs_scan_rate(runs, branch="down")
+    assert result.scan_rates == pytest.approx([.01, .04])
+    assert result.capacitive_fraction == pytest.approx([.02 / .12, .08 / .28])
+    assert any("两个不同扫速" in w for w in result.warnings)
+    assert np.isnan(dunn_fraction_vs_scan_rate(runs).capacitive_fraction).all()
+    undefined = dunn_analysis(runs, selected_scan_rate=.01, fraction_basis="measured")
+    assert np.isnan(undefined.capacitive_fraction)
+    assert any("占比未定义" in warning for warning in undefined.warnings)
+    prediction = dunn_analysis(runs, branch="down", selected_scan_rate=.03)
+    assert prediction.measured_current is None
+    assert prediction.capacitive_fraction == pytest.approx(.06 / (.06 + np.sqrt(.03)))
+    assert np.isnan(dunn_analysis(runs, branch="down", selected_scan_rate=.03,
+                                  fraction_basis="measured").capacitive_fraction)
+    assert prediction.total_current == pytest.approx(-(2 * .03 + np.sqrt(.03)))
+
+
+def test_dunn_fitted_charge_can_cancel_with_nonzero_measured_charge():
+    rates = np.array([.01, .04, .09])
+    # This residual is orthogonal to both columns of the transformed regression.
+    residual = np.array([.01, -.02, .01])
+    observed = -5 * rates + np.sqrt(rates) * (1 + residual)
+    runs = []
+    for i, (rate, current) in enumerate(zip(rates, observed)):
+        cycle = SimpleNamespace(valid=True, branch_up=np.array([[0., current], [1., current]]))
+        runs.append(SimpleNamespace(run_id=str(i), metadata=SimpleNamespace(scan_rate=rate), cycles=[cycle]))
+    fitted = dunn_analysis(runs, selected_scan_rate=.04)
+    measured = dunn_analysis(runs, selected_scan_rate=.04, fraction_basis="measured")
+    assert np.isnan(fitted.capacitive_fraction)
+    assert measured.capacitive_fraction == pytest.approx(-.2 / observed[1])
+    assert measured.capacitive_current == pytest.approx(fitted.capacitive_current)
+    assert measured.diffusive_current == pytest.approx(fitted.diffusive_current)
 
 
 def test_trimmed_statistics_share_sample_and_recompute_clears_flags(synthetic_cv_runs):

@@ -42,6 +42,7 @@ from cvanalysis.plotting.paper import paper_legend_settings, paper_overrides
 from cvanalysis.plotting.template_format import TemplateError, format_template
 from cvanalysis.plotting.it_references import references_from_options
 from cvanalysis.ui.theme import apply_button_role, apply_theme_role
+from cvanalysis.ui.dialogs.dunn_basis import BASIS_LABELS, BASIS_NOTE, show_dunn_basis
 from cvanalysis.ui.tokens import BASE_FONT_SIZE, UiTokens
 from cvanalysis.ui.widgets.formatted_text_preview import FormattedTextPreview
 
@@ -299,8 +300,12 @@ class AnalysisOptionsPanel(QWidget):
                 )
             if combo.count() == 0:
                 combo.addItem("（当前图没有 CP 数据）", None)
-            target = saved or current
+            target = current if current in by_id else saved
             index = combo.findData(target) if target else -1
+            hidden = self.tab.dataset.find_cp(saved) if index < 0 and saved else None
+            if hidden is not None:
+                combo.insertItem(0, f"（未勾选）{hidden.display_short_name}", None)
+                index = 0
             combo.setCurrentIndex(index if index >= 0 else 0)
 
     def refresh_cp_concat_controls(self) -> None:
@@ -434,6 +439,29 @@ class AnalysisOptionsPanel(QWidget):
                 combo.setCurrentIndex(index if index >= 0 else combo.findData("absolute"))
                 self.form.addRow("b 值电流来源", combo)
                 self.controls["b_current_mode"] = combo
+        if spec.kind in ("cv_contribution", "cv_contribution_vs_rate"):
+            branch = QComboBox()
+            branch.addItem("正扫（电位递增）", "up")
+            branch.addItem("反扫（电位递减）", "down")
+            branch.setCurrentIndex(max(0, branch.findData(spec.analysis_options.get("dunn_branch", "up"))))
+            self.form.addRow("Dunn 扫描支路", branch)
+            self.controls["dunn_branch"] = branch
+            basis = QComboBox()
+            for key, label in BASIS_LABELS.items():
+                basis.addItem(label, key)
+            basis.setCurrentIndex(max(0, basis.findData(spec.analysis_options.get("dunn_fraction_basis", "fitted"))))
+            basis.setToolTip(BASIS_NOTE)
+            self.form.addRow("贡献率 100% 基准", basis)
+            self.controls["dunn_fraction_basis"] = basis
+        if spec.kind == "cv_contribution_vs_rate":
+            layout = QComboBox()
+            layout.addItem("随基准自动", "auto")
+            layout.addItem("并排", "grouped")
+            layout.addItem("堆叠（扩散在下）", "stacked")
+            layout.setCurrentIndex(max(0, layout.findData(spec.analysis_options.get("dunn_bar_layout", "auto"))))
+            layout.setToolTip("自动模式下，拟合分量之和为基准时堆叠，实测净电荷为基准时并排。堆叠时异号分量从零线分别向两侧绘制。")
+            self.form.addRow("柱状图布局", layout)
+            self.controls["dunn_bar_layout"] = layout
         if spec.kind == "cv_contribution":
             control = self.spin(.000001, 1000000, spec.selected_scan_rate or .01)
             control.setSuffix(" V/s")
@@ -1938,9 +1966,27 @@ class AnalysisOptionsPanel(QWidget):
                     order=self.tab.spec.analysis_options.get("cp_concat_order"),
                     ranges=self.tab.spec.analysis_options.get("cp_concat_ranges"),
                 )
-                analysis["cp_concat_order"] = concat_order
-                analysis["cp_concat_ranges"] = concat_ranges
-                if analysis.get("capacity_percent_mode") == "unified":
+                saved = self.tab.spec.analysis_options
+                valid_cp = {run.run_id for run in self.tab.dataset.cp_runs}
+                saved_order = saved.get("cp_concat_order") or []
+                saved_ranges = saved.get("cp_concat_ranges") or {}
+                analysis["cp_concat_order"] = list(dict.fromkeys(
+                    [run_id for run_id in saved_order if run_id in valid_cp] + concat_order
+                ))
+                analysis["cp_concat_ranges"] = {
+                    **{run_id: bounds for run_id, bounds in saved_ranges.items() if run_id in valid_cp},
+                    **concat_ranges,
+                }
+                saved_reference = saved.get("capacity_percent_reference_run_id")
+                hidden_reference = (
+                    not analysis.get("capacity_percent_reference_run_id")
+                    and saved_reference in valid_cp
+                    and saved_reference not in concat_summaries
+                )
+                if hidden_reference:
+                    analysis["capacity_percent_reference_run_id"] = saved_reference
+                    analysis["capacity_percent_reference_cycle"] = saved.get("capacity_percent_reference_cycle")
+                if analysis.get("capacity_percent_mode") == "unified" and not hidden_reference:
                     reference_run_id = analysis.get(
                         "capacity_percent_reference_run_id"
                     )
@@ -2128,6 +2174,7 @@ class AnalysisOptionsPanel(QWidget):
             return
         for key, value in changes.items():
             setattr(self.tab.spec, key, value)
+        old_basis = self.tab.spec.analysis_options.get("dunn_fraction_basis", "fitted")
         self.tab.spec.analysis_options.update(analysis)
         log_formats = {
             side: combo.currentData()
@@ -2183,3 +2230,5 @@ class AnalysisOptionsPanel(QWidget):
         self.applied.emit(self.tab)
         apply_theme_role(self.error, "success")
         self.error.setText("已应用")
+        if analysis.get("dunn_fraction_basis", old_basis) != old_basis:
+            show_dunn_basis(self, analysis["dunn_fraction_basis"])

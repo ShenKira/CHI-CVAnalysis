@@ -80,7 +80,8 @@ def test_cp_cycle_reference_is_separate_per_direction(synthetic_cp_run, quantity
         "capacity_series": "both", "show_efficiency": False,
         "capacity_percent_mode": "cycle", "capacity_percent_cycle": 1})
     fig = Figure()
-    assert not draw_cp_capacity(fig, Dataset(cp_runs=[run]), spec, BUILTIN_PRESETS["daily"])
+    warnings = draw_cp_capacity(fig, Dataset(cp_runs=[run]), spec, BUILTIN_PRESETS["daily"])
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     assert fig.axes[0].lines[0].get_ydata()[0] == pytest.approx(100)
     assert fig.axes[0].lines[1].get_ydata()[0] == pytest.approx(100)
     spec.analysis_options["capacity_series"] = "mean"

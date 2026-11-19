@@ -16,7 +16,7 @@
   `ui/tokens.py` 统一字体、间距、控件高度和圆角；`ui/layout.py` 负责首次窗口尺寸与对话框屏幕适配；`ui/theme.py` 生成带语义角色的 QSS 和按钮层级。设计规则见根目录 [DESIGN.md](../DESIGN.md)。
   快捷参数对话框区分“应用”（只写当前图 override）与“保存到配置”（写用户预设）；选择预设只应用预设、保留 override，不再强制弹窗。
   GUI 主题由 `appearance.py` 从 `default_themes.json` / 用户 `themes.json` 加载；旧主题文件缺失的新角色按同 id 内置主题回退。主题、缩放、材质和局部动画统一放在“GUI 设置”；`ui/glass/` 管理局部材质、下拉、按钮组、右侧分析面板 Liquid Glass 悬浮提示和悬浮工具栏。下拉弹窗必须使用 `LiquidComboView` 并保持 popup 不透明皮肤，避免 Windows 动画黑背景。
-  数据集树勾选确定新图范围；已有图使用独立的 run/Cycle 快照，通过 `PlotDataDialog` 修改。旧项目的 `follow_dataset` 字段加载时忽略，已保存的选择继续保留。`LegendTemplateDialog` 编辑数据级默认图例模板，`LegendAliasDialog` 编辑单 run 人工别名。左树列已精简为名称、图例/别名、扫速/频率/电流、窗口/频率、循环/点数、状态；分析指标只在左下结果面板显示。
+  数据树勾选实时修改当前图的 `PlotSpec.run_ids` 和 `cycle_selection`。切换标签时 `DatasetTreeModel.set_check_selection()` 回填该页状态，用户编辑信号单独处理。`PlotDataDialog` 与左树同步，仍支持逐图图例。无图时显示项目级工作区勾选，旧项目的 `follow_dataset` 字段继续按兼容方式忽略。`LegendTemplateDialog` 编辑数据级默认图例模板，`LegendAliasDialog` 编辑单 run 别名。
   分析面板保留 CV/EIS/CP/LSV/I-T/显示选项；CV/EIS/CP 结果表由 `ui.widgets.results_panel.ResultsPanel` 放在左下角。CV/CP 结果表是两级树，双击 run 行展开每个 cycle 的电容、归一化值、容量、效率和 IR 降。`ui.widgets.view_columns.ViewColumns` 统一管理树和表格：所有列可拖动，首次按内容适配，双击/表头右键重新适配；主窗口列宽保存在 `ui.column_widths`，分隔条尺寸保存在 `ui.dataset_splitter` / `ui.bottom_splitter`。当前图“坐标范围”页提供 EIS 阻抗/CV/CP 电流单位切换和强制统一 X/Y 刻度间隔；范围输入按显示单位读写，切换单位时由 `plotting/axis_limits.py` 保持物理范围。LSV/I-T 分析参数支持每图参考面积/参考电容与动态 A/cm²、A/电容单位。
 - `cvanalysis/compat`：v1 `CVAnalyzer`/`EISAnalyzer` 薄适配层。根目录同名模块 re-export 这些类。
 
@@ -27,8 +27,12 @@
      -> services.dataset_service.refresh_analysis -> CVRunSummary / EISMetrics / CPRunSummary
      -> ui.models.DatasetTreeModel
      -> PlotSpec + PlotStyle + legend.effective_template -> plotting.render_plot -> Figure
-     -> PlotTab / export
+     -> PlotTab / export + diagnostics -> non-modal dialog / workspace log
 ```
+
+- 统计和拟合统一由分析层计算，绘图层只选择输入、归一化口径和显示样式。b 值及 Trasatti 的拟合按不同扫速等权。Trasatti 总电荷使用 `1/q–√v` 的截距倒数。
+- Dunn 基准、支路和自动/并排/堆叠布局保存在 `PlotSpec.analysis_options`。CP 暂时隐藏时保留拼接范围与统一参考。删除项目数据才清除失效 run ID。
+- 空图、无有效拟合和绘图异常通过诊断返回。预览、复制和导出共享同一判定。GUI 统一用弹窗和带日志级别的红字记录，图形只保留数据和正常图注。
 
 ## 配置兼容
 
@@ -61,9 +65,9 @@
 - 绘图：所有图表类型和预设的 Agg smoke test、图例模板展开/覆盖/未知字段、相似长文件名紧凑标签、人工别名、图例边界、手动 X/Y 范围（含 Bode/EIS 拟合双子图和 CP 双 Y 轴分栏）、Nyquist 高频过滤的自动范围与手动范围优先
 - Cap-scan：线性/幂律/坐标直线拟合、自动对数坐标、论文图例
 - 项目：保存/恢复映射、图例模板和人工别名持久化、选项往返、CP run_id 映射
-- GUI：离屏导入、批量出图、自动 EIS 拟合、每图数据快照、玻璃控件和悬浮工具栏、右侧 Liquid Glass tooltip、下拉弹窗不透明皮肤、分隔条对齐、真实鼠标拖列、列宽恢复、固定底栏/旧布局迁移、分析标签和参数恢复、右键复制 PNG/SVG 矢量图、线条与 marker 填充/边缘颜色覆盖
+- GUI：离屏导入、批量出图、EIS 拟合、当前图实时勾选与每图状态恢复、诊断弹窗与红字日志、玻璃控件、下拉弹窗不透明皮肤、列宽恢复、固定底栏、右键复制 PNG/SVG、图线和 marker 颜色覆盖
 
-2026-11-17 发布后维护完整回归为 549 项通过（开发环境 175.24 s、打包环境 180.52 s，均退出码 0；发布基线见 Build）；真实 Windows 桌面的 GUI 和打包程序仍需单独验收。覆盖策略、精确目标及 GUI/绘图/Release 定向组见 [测试指南](TESTING.md) 和 [tools/README.md](../tools/README.md)，定向组不替代完整套件。历史 `test_review_revision.py` 已按领域拆分/合并后退役。GUI 主题颜色由 `cvanalysis/default_themes.json` 提供默认模板，用户目录缺失 `themes.json` 时自动创建；主题与缩放统一在“工具 → 设置 → GUI 设置”中管理。GUI 设计 token 与扩展规则见 [DESIGN.md](../DESIGN.md)。[PROJECT_REVIEW.md](PROJECT_REVIEW.md) 和 [PERFORMANCE_OPTIMIZATION_PLAN.md](PERFORMANCE_OPTIMIZATION_PLAN.md) 是历史审查及规划，并非当前状态。
+2026-11-19 的开发和打包 Python 环境各通过 568 项源码测试。覆盖策略及精确目标见 [测试指南](TESTING.md) 和 [tools/README.md](../tools/README.md)。正式发布验收与 EXE 验收分别见 [Build](../Build.md)。GUI 设计见 [DESIGN.md](../DESIGN.md)。[项目审查](PROJECT_REVIEW.md) 和 [性能规划](PERFORMANCE_OPTIMIZATION_PLAN.md) 记录各自的历史检查点。
 
 I-T 多参考线由 `plotting/it_references.py`、`sweep_renderer.py` 和 `ui/dialogs/it_reference_dialog.py` 负责；参考时间的逐数据标签显示状态和位置在项目加载时按 run_id 重映射。受限变量格式、MathText 和换行语义见 [TEXT_MARKUP_PLAN.md](TEXT_MARKUP_PLAN.md) 语法规则，核心是 `plotting/template_format.py`；不执行用户 Python 或外部 TeX。
 

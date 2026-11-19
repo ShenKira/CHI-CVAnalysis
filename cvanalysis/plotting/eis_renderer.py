@@ -39,25 +39,9 @@ _CJK_FONT_CACHE: list[str] | None = None
 _EQUAL_ASPECT_MAX_SPAN_RATIO = 4.0
 
 
-def _cjk_fonts() -> list[str]:
-    global _CJK_FONT_CACHE
-    if _CJK_FONT_CACHE is not None:
-        return _CJK_FONT_CACHE
-    from matplotlib import font_manager
-
-    available = {font.name for font in font_manager.fontManager.ttflist}
-    candidates = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Arial Unicode MS", "DejaVu Sans"]
-    _CJK_FONT_CACHE = [name for name in candidates if name in available] or ["DejaVu Sans"]
-    return _CJK_FONT_CACHE
-
-
-def _message(figure: Figure, style: PlotStyle, text: str) -> None:
+def _empty_plot(figure: Figure) -> None:
     figure.clear()
-    ax = figure.add_subplot(111)
-    ax.text(0.5, 0.5, text, transform=ax.transAxes, ha="center", va="center",
-            fontsize=max(10, style.font_size), color="#888888", fontfamily=_cjk_fonts())
-    ax.set_axis_off()
-    style.apply(figure)
+    figure.add_subplot(111).set_axis_off()
 
 
 def _selected_runs(dataset: Dataset, spec: PlotSpec) -> list[EISRun]:
@@ -220,16 +204,8 @@ def _format_metrics(
     if fit is not None:
         parameters = fit.parameters
         rs = parameters.get("Rs_ohm")
-        if metrics is not None and metrics.rs_ohm is not None and (
-            rs is None or rs < max(1e-9, 1e-4 * metrics.rs_ohm)
-        ):
-            rs = metrics.rs_ohm
         rct = parameters.get("Rct_ohm")
-        if rct is None and metrics is not None:
-            rct = metrics.rct_ohm
         c_eff = parameters.get("C_eff_F")
-        if c_eff is None and metrics is not None:
-            c_eff = metrics.cdl_F
         rs, rs_family = _impedance_metric(rs, run, normalization)
         rct, rct_family = _impedance_metric(rct, run, normalization)
         lines = [
@@ -239,12 +215,13 @@ def _format_metrics(
                 "annotation.eis.rs",
                 value=_format_metric_with_unit(rs, rs_family, impedance_override),
             ),
-            plot_text(
-                spec,
-                "annotation.eis.rct",
-                value=_format_metric_with_unit(rct, rct_family, impedance_override),
-            ),
         ]
+        if fit.frequencies.size:
+            lines.append(plot_text(spec, "annotation.eis.fit_range",
+                                   low=float(np.min(fit.frequencies)), high=float(np.max(fit.frequencies))))
+        if rct is not None:
+            lines.append(plot_text(spec, "annotation.eis.rct",
+                                   value=_format_metric_with_unit(rct, rct_family, impedance_override)))
         if c_eff:
             lines.append(
                 plot_text(
@@ -338,14 +315,14 @@ def draw_nyquist(
 ) -> list[str]:
     runs = _selected_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 EIS 数据")
+        _empty_plot(figure)
         return ["没有选择 EIS 数据"]
     warnings: list[str] = []
     normalization = _resolve_normalization(runs, spec.normalization, warnings)
     runs = _filtered_runs(runs, spec)
     runs = [run for run in runs if len(run.freq) >= 1]
     if not runs:
-        _message(figure, style, "所选频率范围内无数据")
+        _empty_plot(figure)
         return warnings + ["所选频率范围内无数据"]
 
     impedance_override = _unit_override(spec, "impedance")
@@ -422,9 +399,6 @@ def draw_nyquist(
                            frameon=style.legend_frame, shadow=style.legend_shadow,
                            ncol=style.legend_columns)
         style.style_legend(legend)
-    if warnings:
-        ax.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax.transAxes, ha="left", va="top",
-                fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -441,14 +415,14 @@ def draw_bode(
 ) -> list[str]:
     runs = _selected_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 EIS 数据")
+        _empty_plot(figure)
         return ["没有选择 EIS 数据"]
     warnings: list[str] = []
     normalization = _resolve_normalization(runs, spec.normalization, warnings)
     runs = _filtered_runs(runs, spec)
     runs = [run for run in runs if len(run.freq) >= 2]
     if not runs:
-        _message(figure, style, "所选频率范围内无数据")
+        _empty_plot(figure)
         return warnings + ["所选频率范围内无数据"]
 
     impedance_override = _unit_override(spec, "impedance")
@@ -510,9 +484,6 @@ def draw_bode(
                                  frameon=style.legend_frame, shadow=style.legend_shadow,
                                  ncol=style.legend_columns)
         style.style_legend(legend)
-    if warnings:
-        ax_phase.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax_phase.transAxes, ha="left", va="top",
-                      fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -529,12 +500,12 @@ def draw_fit(
 ) -> list[str]:
     runs = _selected_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 EIS 数据")
+        _empty_plot(figure)
         return ["没有选择 EIS 数据"]
     fits = fits or {}
     available = [run for run in runs if run.run_id in fits]
     if not available:
-        _message(figure, style, "请先点击“拟合”生成结果")
+        _empty_plot(figure)
         return ["没有拟合结果"]
     warnings: list[str] = []
     normalization = _resolve_normalization(available, spec.normalization, warnings)
@@ -625,9 +596,6 @@ def draw_fit(
                            frameon=style.legend_frame, shadow=style.legend_shadow,
                            ncol=style.legend_columns)
         style.style_legend(legend)
-    if warnings:
-        ax.text(0.02, 0.98, "\n".join(warnings[:3]), transform=ax.transAxes, ha="left", va="top",
-                fontsize=max(8, style.annotation_size - 1), color="#a33", fontfamily=_cjk_fonts())
     _finish(figure, style, spec)
     return warnings
 
@@ -648,5 +616,5 @@ def draw(
         return draw_bode(figure, dataset, spec, style, color_config=color_config, fits=fits, metrics=metrics)
     if spec.kind == "eis_fit":
         return draw_fit(figure, dataset, spec, style, color_config=color_config, fits=fits, metrics=metrics)
-    _message(figure, style, f"未知 EIS 绘图类型: {spec.kind}")
+    _empty_plot(figure)
     return [f"未知 EIS 绘图类型: {spec.kind}"]

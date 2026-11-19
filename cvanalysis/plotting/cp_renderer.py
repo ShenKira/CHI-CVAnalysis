@@ -39,35 +39,9 @@ from cvanalysis.plotting.template_format import DisplayValue
 _CJK_FONT_CACHE: list[str] | None = None
 
 
-def _cjk_fonts() -> list[str]:
-    global _CJK_FONT_CACHE
-    if _CJK_FONT_CACHE is not None:
-        return _CJK_FONT_CACHE
-    from matplotlib import font_manager
-
-    available = {font.name for font in font_manager.fontManager.ttflist}
-    candidates = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Arial Unicode MS", "DejaVu Sans"]
-    _CJK_FONT_CACHE = [name for name in candidates if name in available] or ["DejaVu Sans"]
-    return _CJK_FONT_CACHE
-
-
-def _message(figure: Figure, style: PlotStyle, text: str) -> None:
+def _empty_plot(figure: Figure) -> None:
     figure.clear()
-    ax = figure.add_subplot(111)
-    ax.text(
-        0.5,
-        0.5,
-        text,
-        transform=ax.transAxes,
-        ha="center",
-        va="center",
-        fontsize=max(10, style.font_size),
-        color="#888888",
-        fontfamily=_cjk_fonts(),
-        wrap=True,
-    )
-    ax.set_axis_off()
-    style.apply(figure)
+    figure.add_subplot(111).set_axis_off()
 
 
 def _selected_runs(dataset: Dataset, spec: PlotSpec) -> list[CPRun]:
@@ -331,7 +305,7 @@ def draw_gcd_curve(
 ) -> list[str]:
     runs = _selected_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CP 数据")
+        _empty_plot(figure)
         return ["没有选择 CP 数据"]
     warnings: list[str] = []
     complete_holds = bool(spec.analysis_options.get("complete_holds", True))
@@ -455,18 +429,6 @@ def draw_gcd_curve(
             ncol=style.legend_columns if len(handles) > 5 else 1,
         )
         style.style_legend(legend)
-    if warnings:
-        ax.text(
-            0.02,
-            0.98,
-            "\n".join(warnings[:3]),
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=max(8, style.annotation_size - 1),
-            color="#a33",
-            fontfamily=_cjk_fonts(),
-        )
     _finish(figure, style, spec)
     return warnings
 
@@ -727,7 +689,7 @@ def draw_cp_capacity(
 ) -> list[str]:
     runs = _selected_runs(dataset, spec)
     if not runs:
-        _message(figure, style, "没有选择 CP 数据")
+        _empty_plot(figure)
         return ["没有选择 CP 数据"]
     warnings: list[str] = []
     options = spec.analysis_options
@@ -765,8 +727,10 @@ def draw_cp_capacity(
             normalization = "none"
 
     summaries = [(run, _summary(run)) for run in runs]
+    for run, summary in summaries:
+        _append_warnings(warnings, [f"{run.display_name}：{message}" for message in summary.warnings])
     if not any(summary.cycles for _, summary in summaries):
-        _message(figure, style, "没有完整的 GCD 循环")
+        _empty_plot(figure)
         return warnings + ["没有完整的 GCD 循环"]
     summary_by_id = {run.run_id: summary for run, summary in summaries}
 
@@ -1148,18 +1112,6 @@ def draw_cp_capacity(
         )
         remember_legend_sources(legend, handles, labels)
         style.style_legend(legend)
-    if warnings:
-        ax.text(
-            0.02,
-            0.98,
-            "\n".join(warnings[:3]),
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=max(8, style.annotation_size - 1),
-            color="#a33",
-            fontfamily=_cjk_fonts(),
-        )
     _finish(figure, style, spec)
     return warnings
 
@@ -1178,7 +1130,7 @@ def draw(
         return draw_gcd_curve(figure, dataset, spec, style, color_config=color_config)
     if spec.kind == "cp_capacity":
         return draw_cp_capacity(figure, dataset, spec, style, color_config=color_config)
-    _message(figure, style, f"未知 CP 绘图类型: {spec.kind}")
+    _empty_plot(figure)
     return [f"未知 CP 绘图类型: {spec.kind}"]
 
 

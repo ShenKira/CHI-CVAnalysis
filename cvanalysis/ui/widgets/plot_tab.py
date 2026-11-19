@@ -15,9 +15,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
-    QLabel,
     QMenu,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QToolButton,
@@ -39,7 +37,7 @@ from cvanalysis.plotting.export import (
 from cvanalysis.plotting.presets import preset_label, preset_names
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, canvas_size_for_ratio
-from cvanalysis.ui.theme import apply_button_role, apply_theme_role, theme_color
+from cvanalysis.ui.theme import apply_button_role
 from cvanalysis.ui.glass.surfaces import MaterialManager
 from cvanalysis.ui.glass.plot_toolbar import CompactNavigationToolbar, FloatingPlotToolbar
 from cvanalysis.ui.glass.popups import wrap_menu
@@ -113,6 +111,7 @@ class CanvasHost(QWidget):
 class PlotTab(QWidget):
     message = Signal(str)
     rendered = Signal(object)
+    warning_reported = Signal(object, object)
     plot_changed = Signal(object)
     preset_changed = Signal(object, str)
     data_requested = Signal(object)
@@ -143,6 +142,7 @@ class PlotTab(QWidget):
         self.user_presets = user_presets or {}
         self.text_values = dict(text_values or {})
         self.warnings: list[str] = []
+        self.reported_warnings: set[str] = set()
         self.dirty = False
         self._fit_to_view = True
         self.glass_manager = glass_manager or MaterialManager(self)
@@ -166,11 +166,6 @@ class PlotTab(QWidget):
         self.toolbar = CompactNavigationToolbar(self.canvas, self.canvas_host)
         self.toolbar.setMaximumHeight(36)
         self.liquid_toolbar = FloatingPlotToolbar(self, self.glass_manager)
-
-        self.warning_label = QLabel("")
-        apply_theme_role(self.warning_label, "error")
-        self.warning_label.setWordWrap(True)
-        layout.addWidget(self.warning_label)
 
     def _show_context_menu(self, position) -> None:
         if not self.canvas.rect().contains(position):
@@ -425,23 +420,9 @@ class PlotTab(QWidget):
             )
         except Exception as exc:  # noqa: BLE001
             self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.text(
-                0.5,
-                0.5,
-                f"绘图失败:\n{exc}",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
-                color=theme_color("error"),
-                fontsize=max(9, self.style.font_size),
-                fontfamily=["Microsoft YaHei", "SimHei", "DejaVu Sans"],
-                wrap=True,
-            )
-            ax.set_axis_off()
-            self.warnings = [str(exc)]
+            self.figure.add_subplot(111).set_axis_off()
+            self.warnings = [f"绘图失败：{exc}"]
         self.canvas.draw_idle()
-        self.warning_label.setText("；".join(self.warnings[:3]))
         self.dirty = False
         self.rendered.emit(self)
 
@@ -480,6 +461,7 @@ class PlotTab(QWidget):
                 if not accepted:
                     return
                 export_style = self.style.with_overrides({"save_dpi": dpi})
+            diagnostics = []
             figure = render_to_new_figure(
                 self.dataset,
                 self.spec,
@@ -488,14 +470,17 @@ class PlotTab(QWidget):
                 fits=self.fits,
                 metrics=self.metrics,
                 text_values=self.text_values,
+                diagnostics=diagnostics,
             )
+            self.warning_reported.emit(self, diagnostics)
             export_figure(figure, output, export_style)
             self.message.emit(f"图表已导出: {output}")
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "导出失败", str(exc))
+            self.warning_reported.emit(self, [f"导出失败：{exc}"])
 
     def copy_plot(self) -> None:
         try:
+            diagnostics = []
             figure = render_to_new_figure(
                 self.dataset,
                 self.spec,
@@ -504,7 +489,9 @@ class PlotTab(QWidget):
                 fits=self.fits,
                 metrics=self.metrics,
                 text_values=self.text_values,
+                diagnostics=diagnostics,
             )
+            self.warning_reported.emit(self, diagnostics)
             buffer = BytesIO()
             figure.savefig(buffer, format="png", dpi=self.style.save_dpi, facecolor=figure.get_facecolor())
             image = QImage.fromData(buffer.getvalue(), "PNG")
@@ -513,10 +500,11 @@ class PlotTab(QWidget):
             QGuiApplication.clipboard().setImage(image)
             self.message.emit("图表已复制到剪贴板")
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "复制失败", str(exc))
+            self.warning_reported.emit(self, [f"复制失败：{exc}"])
 
     def copy_vector_plot(self) -> None:
         try:
+            diagnostics = []
             svg = render_svg_bytes(
                 self.dataset,
                 self.spec,
@@ -525,10 +513,12 @@ class PlotTab(QWidget):
                 fits=self.fits,
                 metrics=self.metrics,
                 text_values=self.text_values,
+                diagnostics=diagnostics,
             )
+            self.warning_reported.emit(self, diagnostics)
             mime = QMimeData()
             mime.setData("image/svg+xml", QByteArray(svg))
             QGuiApplication.clipboard().setMimeData(mime)
             self.message.emit("当前矢量图已复制到剪贴板（SVG）")
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "复制失败", str(exc))
+            self.warning_reported.emit(self, [f"复制失败：{exc}"])

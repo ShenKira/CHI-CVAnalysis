@@ -40,6 +40,14 @@ COLUMNS = [
 ALIAS_COLUMN = 1
 
 
+def run_kind(run: CVRun | EISRun | CPRun | SweepRun) -> str:
+    if isinstance(run, SweepRun):
+        return run.kind
+    if isinstance(run, CVRun):
+        return "cv"
+    return "cp" if isinstance(run, CPRun) else "eis"
+
+
 @dataclass(eq=False)
 class TreeNode:
     kind: str
@@ -98,6 +106,7 @@ class DatasetTreeModel(QAbstractItemModel):
         self._nodes: dict[str, TreeNode] = {}
         self.visible_runs: dict[str, bool] = {}
         self.cycle_selection: dict[str, list[int]] = {}
+        self.check_kind: str | None = None
         self.dataset = Dataset()
         self._auto_labels = {}
         self._text_values: dict | None = None
@@ -136,7 +145,7 @@ class DatasetTreeModel(QAbstractItemModel):
             return Qt.NoItemFlags
         node = self._node(index)
         flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-        if node and node.kind in {"run", "cycle", "group"}:
+        if node and self._can_check(node):
             flags |= Qt.ItemIsUserCheckable
         if node and node.kind == "run":
             flags |= Qt.ItemIsDragEnabled
@@ -231,12 +240,15 @@ class DatasetTreeModel(QAbstractItemModel):
         if node is None:
             return None
         column = index.column()
-        if role == Qt.CheckStateRole and column == 0 and node.kind in {"run", "cycle", "group"}:
+        if role == Qt.CheckStateRole and column == 0 and self._can_check(node):
             return self._check_state(node)
         if role == Qt.DisplayRole:
             return self._display(node, column)
         if role == Qt.ToolTipRole:
-            return self._tooltip(node)
+            tip = self._tooltip(node)
+            if not self._can_check(node):
+                return (tip + "\n" if tip else "") + "此类数据可用于新建图表。"
+            return tip
         alias_text, alias_auto = self._alias_text(node)
         if role == Qt.FontRole and node.kind == "group":
             font = QApplication.font()
@@ -256,7 +268,7 @@ class DatasetTreeModel(QAbstractItemModel):
         if not index.isValid() or role != Qt.CheckStateRole or index.column() != 0:
             return False
         node = self._node(index)
-        if node is None or node.kind not in {"run", "cycle", "group"}:
+        if node is None or not self._can_check(node):
             return False
         # QStyledItemDelegate passes the raw integer 0/2 here, while tests and
         # direct callers may pass Qt.CheckState enums.  PySide6 does not treat
@@ -275,6 +287,45 @@ class DatasetTreeModel(QAbstractItemModel):
         if not index.isValid():
             return self.root
         return index.internalPointer()
+
+    def _can_check(self, node: TreeNode) -> bool:
+        if node.kind not in {"run", "cycle", "group"}:
+            return False
+        if self.check_kind is None:
+            return True
+        run = node.children[0].run if node.kind == "group" and node.children else node.run
+        return run is not None and run_kind(run) == self.check_kind
+
+    def set_check_selection(self, visible_runs, cycle_selection, *, kind: str | None = None) -> None:
+        """Project a tab's checks onto the existing tree without editing a tab."""
+        self.check_kind = kind
+        self.visible_runs = dict(visible_runs)
+        self.cycle_selection = {
+            run_id: list(cycles) for run_id, cycles in cycle_selection.items()
+            if run_id in self._nodes
+        }
+        for group_row, group in enumerate(self.root.children):
+            group_index = self.index(group_row, 0)
+            for run_row, node in enumerate(group.children):
+                run_id = node.run.run_id
+                node.checked = self.visible_runs.get(run_id, True)
+                cycles = self.cycle_selection.get(run_id)
+                selected = None if cycles is None else set(cycles)
+                for child in node.children:
+                    child.checked = node.checked and (selected is None or child.cycle_index in selected)
+                if node.children:
+                    run_index = self.index(run_row, 0, group_index)
+                    self.dataChanged.emit(
+                        self.index(0, 0, run_index),
+                        self.index(len(node.children) - 1, 0, run_index),
+                    )
+            group.checked = any(node.checked for node in group.children)
+            if group.children:
+                self.dataChanged.emit(
+                    self.index(0, 0, group_index),
+                    self.index(len(group.children) - 1, 0, group_index),
+                )
+            self.dataChanged.emit(group_index, group_index)
 
     def _check_state(self, node: TreeNode):
         """Return a truthful tri-state for groups and multi-cycle runs."""
@@ -447,7 +498,6 @@ class DatasetTreeModel(QAbstractItemModel):
                     self._add_eis_run(group, run)
                 group.checked = any(child.checked for child in group.children)
         self.endResetModel()
-        self.selection_changed.emit()
 
     def _add_cv_run(self, parent: TreeNode, run: CVRun) -> None:
         visible = self.visible_runs.get(run.run_id, True)

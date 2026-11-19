@@ -8,6 +8,7 @@ import logging
 import math
 import os
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 from PySide6.QtCore import QItemSelectionModel, QModelIndex, QSize, Qt, QTimer
@@ -63,6 +64,7 @@ from cvanalysis.services.dataset_service import (
 )
 from cvanalysis.services.export_service import export_analysis_csv
 from cvanalysis.services.project_service import load_project, save_project as save_project_file
+from cvanalysis.ui.dialogs.dunn_basis import choose_dunn_basis
 from cvanalysis.services.settings_service import (
     BOTTOM_LAYOUT_VERSION,
     SettingsService,
@@ -77,7 +79,7 @@ from cvanalysis.ui.dialogs.settings_dialog import SettingsDialog
 from cvanalysis.ui.dialogs.style_dialog import StyleEditorDialog
 from cvanalysis.ui.layout import WorkspaceColumnAlignment, fit_dialog, initial_window_size
 from cvanalysis.ui.logging_utils import QtLogHandler, configure_logging
-from cvanalysis.ui.models.dataset_model import ALIAS_COLUMN, DatasetTreeModel
+from cvanalysis.ui.models.dataset_model import ALIAS_COLUMN, DatasetTreeModel, run_kind
 from cvanalysis.ui.theme import apply_button_role, apply_theme_role, application_stylesheet, theme_color
 from cvanalysis.ui.tokens import FONT_FAMILIES, UiTokens
 from cvanalysis.ui.widgets.analysis_panel import AnalysisPanel
@@ -132,11 +134,14 @@ class MainWindow(QMainWindow):
         )
         self.dataset = Dataset()
         self.dataset_model = DatasetTreeModel(self)
+        self._workspace_checks: dict[str, bool] = {}
+        self._workspace_cycles: dict[str, list[int]] = {}
         self.fits: dict[str, EISFitResult] = {}
         self.metrics: dict = {}
         self._tasks = []
         self.import_thread: ImportThread | None = None
         self._progress: QProgressDialog | None = None
+        self._plot_warning_box: QMessageBox | None = None
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setSingleShot(True)
         self._redraw_timer.setInterval(80)
@@ -148,11 +153,12 @@ class MainWindow(QMainWindow):
         self.logger, self.log_handler = self._setup_logging()
         if self.settings_service.migrated_from_v1:
             self.logger.info("已迁移 v1 config.json，旧版备份为 config.json.v1.bak")
-        for warning in self.settings_service.load_warnings:
-            self.logger.warning("配置: %s", warning)
         self._build_ui()
         self._build_actions()
         self._connect_signals()
+        for warning in self.settings_service.load_warnings:
+            self.logger.warning("配置: %s", warning)
+        self._show_warning_popup("配置", self.settings_service.load_warnings)
         self._install_glass_controls()
         self._restore_ui_state()
         self.column_alignment = WorkspaceColumnAlignment(self)
@@ -265,14 +271,14 @@ class MainWindow(QMainWindow):
         tree_layout = QVBoxLayout(tree_widget)
         tree_layout.setContentsMargins(4, 4, 4, 4)
         tree_layout.setSpacing(4)
-        hint = QLabel("勾选用于新建图；拖动文件可排序。")
-        hint.setToolTip(
-            "勾选文件/循环用于新建图；右键图表可自定义当前图数据；"
-            "右键文件可设置面积、图例模板、别名或快速绘图。"
+        self.dataset_hint = QLabel("勾选文件或循环以新建图")
+        self.dataset_hint.setToolTip(
+            "勾选文件或循环会更新当前图。点击文件行可查看详情，右键可快速新建对应类型的图。"
+            "拖动文件可调整工作区顺序。"
         )
-        hint.setWordWrap(True)
-        apply_theme_role(hint, "hint")
-        tree_layout.addWidget(hint)
+        self.dataset_hint.setWordWrap(True)
+        apply_theme_role(self.dataset_hint, "hint")
+        tree_layout.addWidget(self.dataset_hint)
         action_row = QHBoxLayout()
         select_all_btn = QPushButton("全选")
         select_all_btn.setProperty("secondary", True)
@@ -794,6 +800,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "没有数据", "选中的文件没有可用的 CV/EIS/CP 数据\n" + details)
             return
         was_empty = self.dataset.is_empty
+        existing_ids = {run.run_id for run in self.dataset.all_runs()}
+        added = [run for run in new_dataset.all_runs() if run.run_id not in existing_ids]
+        tab_count = self.tabs.count()
+        active = self._active_plot_tab()
+        for run in added:
+            self._workspace_checks[run.run_id] = tab_count < 2
+        if tab_count == 1 and active is not None:
+            kind = active.spec.kind.split("_", 1)[0]
+            active.spec.run_ids.extend(run.run_id for run in added if run_kind(run) == kind)
         self.dataset.merge(new_dataset)
         if was_empty:
             self.dataset.name = new_dataset.name
@@ -834,17 +849,15 @@ class MainWindow(QMainWindow):
             + [message for message in warnings if "分析失败" in message]
         ))
         self._refresh_model_and_panel()
-        if self.tabs.count() == 0:
-            if self.dataset.cv_runs:
-                self._request_plot("cv_overlay")
-            if self.dataset.eis_runs:
-                self._request_plot("eis_nyquist")
-            if self.dataset.cp_runs:
-                self._request_plot("cp_gcd")
-            if self.dataset.lsv_runs:
-                self._request_plot("lsv_curve")
-            if self.dataset.it_runs:
-                self._request_plot("it_curve")
+        if tab_count == 0:
+            for kind, runs in (
+                ("cv_overlay", self.dataset.cv_runs), ("eis_nyquist", self.dataset.eis_runs),
+                ("cp_gcd", self.dataset.cp_runs), ("lsv_curve", self.dataset.lsv_runs),
+                ("it_curve", self.dataset.it_runs),
+            ):
+                run_ids = [run.run_id for run in runs if self._workspace_run_checked(run.run_id)]
+                if run_ids:
+                    self._request_plot(kind, run_ids=run_ids)
         else:
             self._prune_tab_specs()
             self._redraw_all_tabs()
@@ -865,6 +878,10 @@ class MainWindow(QMainWindow):
         self._mark_dirty()
         if issues or analysis_failures:
             self._show_import_issues(issues, analysis_failures)
+        self._show_warning_popup("导入与分析", [
+            message for message in dict.fromkeys([*new_dataset.warnings, *warnings])
+            if message not in analysis_failures
+        ])
 
     def _show_import_issues(self, issues, analysis_failures=()) -> None:
         lines = [f"{issue.path}: {issue.message}" for issue in issues[:12]]
@@ -878,31 +895,32 @@ class MainWindow(QMainWindow):
         )
 
     def _refresh_model_and_panel(self) -> None:
-        visible = dict(self.dataset_model.visible_runs)
-        cycles = dict(self.dataset_model.cycle_selection)
-        for run in self.dataset.all_runs():
-            visible.setdefault(run.run_id, True)
         self.dataset_model.set_dataset(
             self.dataset,
-            visible,
-            cycles,
+            self._workspace_checks,
+            self._workspace_cycles,
             text_values=self.settings_service.resolve_text_preset(),
         )
         self.tree.expandAll()
-        selected = self._selected_run_ids()
-        visible_ids = self.dataset_model.visible_run_ids()
-        self.analysis_panel.update_dataset(
-            self.dataset,
-            selected_run_ids=selected,
-            visible_run_ids=visible_ids,
-        )
-        self.results_panel.update_dataset(
-            self.dataset,
-            selected_run_ids=selected,
-            visible_run_ids=visible_ids,
-        )
+        self._sync_tree_checks(self._active_plot_tab())
         self._update_plot_contexts()
-        self._update_cp_concat_actions()
+
+    def _workspace_run_checked(self, run_id: str) -> bool:
+        return self._workspace_checks.get(run_id, True) and self._workspace_cycles.get(run_id) != []
+
+    def _sync_tree_checks(self, tab: PlotTab | None) -> None:
+        if tab is None:
+            self.dataset_hint.setText("勾选文件或循环以新建图")
+            self.dataset_model.set_check_selection(self._workspace_checks, self._workspace_cycles)
+        else:
+            self.dataset_hint.setText(f"当前图数据 · {tab.spec.label}")
+            selected = set(tab.spec.run_ids)
+            self.dataset_model.set_check_selection(
+                {run.run_id: run.run_id in selected for run in self.dataset.all_runs()},
+                tab.spec.cycle_selection,
+                kind=tab.spec.kind.split("_", 1)[0],
+            )
+        self._on_tree_selection_changed()
 
     def clear_dataset(self) -> None:
         if self.dataset.is_empty:
@@ -915,6 +933,8 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, "确认", "清空当前所有数据？") != QMessageBox.Yes:
             return
         self.dataset.clear()
+        self._workspace_checks.clear()
+        self._workspace_cycles.clear()
         self.fits.clear()
         self.metrics.clear()
         self._close_all_tabs_silent()
@@ -967,6 +987,18 @@ class MainWindow(QMainWindow):
         self._remove_runs(run_ids)
 
     def _on_dataset_visibility_changed(self, *args) -> None:
+        tab = self._active_plot_tab()
+        if tab is None:
+            self._workspace_checks = dict(self.dataset_model.visible_runs)
+            self._workspace_cycles = copy.deepcopy(self.dataset_model.cycle_selection)
+        else:
+            kind = tab.spec.kind.split("_", 1)[0]
+            tab.spec.run_ids = [
+                run.run_id for run in self.dataset.all_runs()
+                if run_kind(run) == kind and self.dataset_model.visible_runs.get(run.run_id, True)
+            ]
+            tab.spec.cycle_selection = copy.deepcopy(self.dataset_model.cycle_selection)
+            self._plot_data_changed(tab)
         self._on_tree_selection_changed()
         self._mark_dirty()
 
@@ -988,15 +1020,22 @@ class MainWindow(QMainWindow):
         selected = self._selected_run_ids()
         self._update_file_details(selected)
         visible_ids = self.dataset_model.visible_run_ids()
+        creation_ids = visible_ids
+        if self.dataset_model.check_kind is not None:
+            creation_ids = [
+                *visible_ids,
+                *(run.run_id for run in self.dataset.all_runs()
+                  if run_kind(run) != self.dataset_model.check_kind and self._workspace_run_checked(run.run_id)),
+            ]
         self.analysis_panel.update_dataset(
             self.dataset,
             selected_run_ids=selected,
-            visible_run_ids=visible_ids,
+            visible_run_ids=creation_ids,
         )
         self.results_panel.update_dataset(
             self.dataset,
             selected_run_ids=selected,
-            visible_run_ids=visible_ids,
+            visible_run_ids=creation_ids,
         )
         self._update_cp_concat_actions()
 
@@ -1355,22 +1394,22 @@ class MainWindow(QMainWindow):
         cycle_selection = dialog.cycle_selection()
         tab.spec.run_ids = run_ids
         tab.spec.cycle_selection = cycle_selection
-        tab.spec.legend_templates = dialog.legend_templates()
-        self._sync_cp_concat_spec(tab.spec)
-        tab.update_context(
-            self.dataset,
-            fits=self.fits,
-            metrics=self.metrics,
-            color_config=self.settings_service.color_config,
-            user_presets=self._available_plot_presets(),
-        )
-        self._update_plot_tab_label(tab)
-        tab.redraw()
-        if self.options_panel.tab is tab:
-            self.options_panel.refresh_cp_concat_controls()
-        self._update_file_details(self._selected_run_ids())
+        # Keep per-file overrides while a run is temporarily absent.
+        for run_id in run_ids:
+            tab.spec.legend_templates.pop(run_id, None)
+        tab.spec.legend_templates.update(dialog.legend_templates())
+        if tab is self._active_plot_tab():
+            self._sync_tree_checks(tab)
+        self._plot_data_changed(tab)
         self._mark_dirty()
         self.statusBar().showMessage(f"当前图已选择 {len(tab.spec.run_ids)} 个数据")
+
+    def _plot_data_changed(self, tab: PlotTab) -> None:
+        self._update_plot_tab_label(tab)
+        if self.options_panel.tab is tab:
+            self.options_panel.refresh_cp_concat_controls()
+        self._mark_tab_dirty(tab)
+        self._redraw_timer.start()
 
     def _remove_runs(self, run_ids: list[str]) -> None:
         if not run_ids:
@@ -1381,6 +1420,8 @@ class MainWindow(QMainWindow):
             self.dataset.remove_run(run_id)
             self.fits.pop(run_id, None)
             self.metrics.pop(run_id, None)
+            self._workspace_checks.pop(run_id, None)
+            self._workspace_cycles.pop(run_id, None)
         self._refresh_model_and_panel()
         if self.dataset.is_empty:
             self._close_all_tabs_silent()
@@ -1430,9 +1471,13 @@ class MainWindow(QMainWindow):
         options = self.analysis_panel.options()
         selected_run_ids = [run.run_id for run in runs]
         cycle_selection = {}
+        active = self._active_plot_tab()
         for run in runs:
             if isinstance(run, CVRun):
-                selected = self.dataset_model.selected_cycle_indices(run.run_id)
+                if active and run.run_id in active.spec.run_ids:
+                    selected = active.spec.cycle_selection.get(run.run_id)
+                else:
+                    selected = self._workspace_cycles.get(run.run_id) or None
                 if selected is not None:
                     cycle_selection[run.run_id] = list(selected)
         spec = PlotSpec(
@@ -1464,6 +1509,13 @@ class MainWindow(QMainWindow):
             spec.analysis_options["unit_overrides"] = {"current": "auto"}
             if kind == "it_curve":
                 spec.analysis_options["it_reference_current_unit"] = "axis"
+        if kind in {"cv_contribution", "cv_contribution_vs_rate"}:
+            basis = choose_dunn_basis(self)
+            if basis is None:
+                return
+            spec.analysis_options["dunn_fraction_basis"] = basis
+        if kind == "cv_bvalue":
+            spec.analysis_options["b_current_mode"] = "up"
         if kind == "cp_capacity":
             spec.analysis_options["cp_display_unit"] = "auto"
         tab = self._add_plot_tab(spec)
@@ -1520,12 +1572,16 @@ class MainWindow(QMainWindow):
         return self._add_plot_tab(spec)
 
     def _sync_cp_concat_spec(self, spec: PlotSpec) -> None:
-        """Keep concatenation metadata consistent with the plotted CP runs."""
+        """Prune deleted files while keeping settings for temporarily hidden runs."""
         if spec.kind != "cp_capacity":
             return
-        selected = set(spec.run_ids)
+        options = spec.analysis_options
+        reference_run_id = options.get("capacity_percent_reference_run_id")
+        configured = set(spec.run_ids)
+        configured.update(options.get("cp_concat_order") or ())
+        configured.update(options.get("cp_concat_ranges") or {})
         runs = [
-            run for run in self.dataset.cp_runs if run.run_id in selected
+            run for run in self.dataset.cp_runs if run.run_id in configured
         ]
         summaries = self._cp_summaries(runs)
         order, ranges = normalize_cp_concat_config(
@@ -1534,14 +1590,11 @@ class MainWindow(QMainWindow):
             order=spec.analysis_options.get("cp_concat_order"),
             ranges=spec.analysis_options.get("cp_concat_ranges"),
         )
-        spec.analysis_options["cp_concat_order"] = order
-        spec.analysis_options["cp_concat_ranges"] = ranges
-        reference_run_id = spec.analysis_options.get(
-            "capacity_percent_reference_run_id"
-        )
-        if reference_run_id and reference_run_id not in selected:
-            spec.analysis_options["capacity_percent_reference_run_id"] = ""
-            spec.analysis_options["capacity_percent_reference_cycle"] = None
+        options["cp_concat_order"] = order
+        options["cp_concat_ranges"] = ranges
+        if reference_run_id and self.dataset.find_cp(reference_run_id) is None:
+            options["capacity_percent_reference_run_id"] = ""
+            options["capacity_percent_reference_cycle"] = None
 
     def _edit_cp_concat(self, tab=None):
         tab = tab if tab is not None else self._active_plot_tab()
@@ -1572,10 +1625,12 @@ class MainWindow(QMainWindow):
         order = dialog.order()
         ranges = dialog.ranges()
         options = tab.spec.analysis_options
-        options["cp_concat_order"] = list(order)
-        options["cp_concat_ranges"] = {
-            run_id: dict(bounds) for run_id, bounds in ranges.items()
-        }
+        ordered_runs = iter(order)
+        edited = set(order)
+        prior_order = dict.fromkeys(options.get("cp_concat_order") or [])
+        kept_order = [next(ordered_runs) if run_id in edited else run_id for run_id in prior_order]
+        options["cp_concat_order"] = [*kept_order, *ordered_runs]
+        options["cp_concat_ranges"] = {**(options.get("cp_concat_ranges") or {}), **ranges}
         message = "CP 拼接设置已更新"
         if options.get("capacity_percent_mode") == "unified":
             reference_run_id = str(
@@ -1587,13 +1642,13 @@ class MainWindow(QMainWindow):
             if reference_run_id:
                 reference_run = by_id.get(reference_run_id)
                 bounds = ranges.get(reference_run_id)
-                if reference_run is None or bounds is None:
+                if reference_run is None:
                     options["capacity_percent_reference_run_id"] = ""
                     options["capacity_percent_reference_cycle"] = None
                     message = (
-                        "统一 100% 参考文件已不在当前图中，参考设置已清除"
+                        "统一 100% 参考文件已从项目删除，参考设置已清除"
                     )
-                else:
+                elif bounds is not None:
                     try:
                         cycle_index = int(reference_cycle)
                     except (TypeError, ValueError, OverflowError):
@@ -1744,8 +1799,10 @@ class MainWindow(QMainWindow):
             selected = [run for run in all_runs if run.run_id in selected_rows]
             if selected:
                 return selected
-        visible = set(self.dataset_model.visible_run_ids(kind))
-        return [run for run in all_runs if run.run_id in visible]
+        if self.dataset_model.check_kind == kind:
+            visible = set(self.dataset_model.visible_run_ids(kind))
+            return [run for run in all_runs if run.run_id in visible]
+        return [run for run in all_runs if self._workspace_run_checked(run.run_id)]
 
     def _cv_runs_for_plot(self, run_ids: list[str] | None = None) -> list[CVRun]:
         return self._runs_for_plot(self.dataset.cv_runs, run_ids, "cv")
@@ -1777,6 +1834,7 @@ class MainWindow(QMainWindow):
         )
         tab.message.connect(self.statusBar().showMessage)
         tab.rendered.connect(self._on_plot_rendered)
+        tab.warning_reported.connect(self._report_plot_warnings)
         tab.preset_changed.connect(self._on_tab_preset_changed)
         tab.data_requested.connect(self._edit_plot_data)
         tab.plot_changed.connect(lambda *_: self._mark_dirty())
@@ -1787,6 +1845,7 @@ class MainWindow(QMainWindow):
         self._update_plot_contexts()
         self._refresh_preset_combo()
         self._mark_dirty()
+        self._report_plot_warnings(tab)
         return tab
 
     def _update_plot_tab_label(self, tab: PlotTab) -> None:
@@ -1818,6 +1877,7 @@ class MainWindow(QMainWindow):
         return widget if isinstance(widget, PlotTab) else None
 
     def _on_plot_rendered(self, tab: PlotTab) -> None:
+        self._report_plot_warnings(tab)
         if tab is self._active_plot_tab():
             self.options_panel.refresh_axis_scale_labels()
             if self.options_panel.tab is tab:
@@ -1829,6 +1889,35 @@ class MainWindow(QMainWindow):
                     # Unit/concatenation combos are recreated during redraw;
                     # install their opaque popup skin before the next open.
                     registry.watch(self.options_panel)
+
+    def _report_plot_warnings(self, tab: PlotTab, extra: list[str] | None = None) -> None:
+        current = dict.fromkeys([*tab.warnings, *(extra or ())])
+        new = [message for message in current if message not in tab.reported_warnings]
+        tab.reported_warnings = set(current)
+        if not new:
+            return
+        title = self._plot_tab_title(tab.spec)
+        for message in new:
+            self.logger.warning("%s · %s", title, message)
+        self._show_warning_popup(title, new)
+
+    def _show_warning_popup(self, title: str, messages: list[str]) -> None:
+        if not messages:
+            return
+        box = self._plot_warning_box
+        if box is None:
+            box = QMessageBox(QMessageBox.Icon.Warning, "分析与绘图警告", "", QMessageBox.StandardButton.Ok, self)
+            box.setWindowModality(Qt.WindowModality.NonModal)
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            self._plot_warning_box = box
+        text = title + "\n" + "\n".join(messages)
+        if box.isVisible():
+            text = (box.detailedText() or box.text()) + "\n\n" + text
+        lines = text.splitlines()
+        box.setText("\n".join(lines[:10]) + ("\n其余警告见详细信息和底部日志。" if len(lines) > 10 else ""))
+        box.setDetailedText(text if len(lines) > 10 else "")
+        if not box.isVisible():
+            box.show()
 
     def _close_tab(self, index: int) -> None:
         widget = self.tabs.widget(index)
@@ -1852,6 +1941,8 @@ class MainWindow(QMainWindow):
             self._close_tab(index)
 
     def _close_all_tabs_silent(self) -> None:
+        if self._plot_warning_box is not None:
+            self._plot_warning_box.close()
         self._bind_options_panel(None)
         self._pending_redraw_tabs.clear()
         previous = self.tabs.blockSignals(True)
@@ -1863,6 +1954,7 @@ class MainWindow(QMainWindow):
                     widget.deleteLater()
         finally:
             self.tabs.blockSignals(previous)
+        self._sync_tree_checks(None)
         self._update_tab_actions()
 
     def _update_tab_actions(self) -> None:
@@ -1877,7 +1969,9 @@ class MainWindow(QMainWindow):
             self._mark_dirty()
 
     def _on_tab_changed(self, index: int) -> None:
-        self._bind_options_panel(self._active_plot_tab())
+        active = self._active_plot_tab()
+        self._sync_tree_checks(active)
+        self._bind_options_panel(active)
         self._update_tab_actions()
         tab = self.tabs.widget(index)
         if not isinstance(tab, PlotTab):
@@ -2045,8 +2139,6 @@ class MainWindow(QMainWindow):
             if run is not None:
                 run.summary = metrics_from_fit(run, fit, run.summary)
                 self.metrics[run_id] = run.summary
-            if fit.warnings:
-                errors.extend(f"{run.display_name if run else run_id}: {w}" for w in fit.warnings)
         self._refresh_model_and_panel()
         self._update_plot_contexts()
         # Create or refresh a fit plot.
@@ -2080,8 +2172,6 @@ class MainWindow(QMainWindow):
             if isinstance(tab, PlotTab) and tab.spec.kind.startswith("eis_"):
                 tab.spec.fit_enabled = True
         self._redraw_all_tabs()
-        for error in errors:
-            self.logger.warning(error)
         self._mark_dirty()
         self.statusBar().showMessage(f"EIS 拟合完成：{len(computed)} 个数据")
 
@@ -2350,7 +2440,7 @@ class MainWindow(QMainWindow):
                     }
                 )
             if scientific_changed and not self.dataset.is_empty:
-                refresh_analysis(
+                diagnostics = refresh_analysis(
                     self.dataset,
                     AnalysisSettings(
                         outlier_count=int(self.active_analysis.get("outlier_count", 1)),
@@ -2361,6 +2451,9 @@ class MainWindow(QMainWindow):
                     ),
                     force=True,
                 )
+                for message in diagnostics:
+                    self.logger.warning(message)
+                self._show_warning_popup("重新分析", diagnostics)
                 self.metrics = {run.run_id: run.summary for run in self.dataset.eis_runs if run.summary is not None}
                 self._refresh_model_and_panel()
                 self._redraw_all_tabs()
@@ -2417,8 +2510,8 @@ class MainWindow(QMainWindow):
                 path,
                 self.dataset,
                 name=self.dataset.name,
-                visible_runs=dict(self.dataset_model.visible_runs),
-                cycle_selection=dict(self.dataset_model.cycle_selection),
+                visible_runs=self._workspace_checks,
+                cycle_selection=self._workspace_cycles,
                 plots=specs,
                 active_plot=max(0, self.tabs.currentIndex()),
                 analysis_settings=self.active_analysis,
@@ -2467,6 +2560,8 @@ class MainWindow(QMainWindow):
             self._pending_redraw_tabs.clear()
             self._close_all_tabs_silent()
             self.dataset = Dataset()
+            self._workspace_checks.clear()
+            self._workspace_cycles.clear()
             self.fits = {}
             self.metrics = {}
             self._project_analysis = None
@@ -2506,12 +2601,19 @@ class MainWindow(QMainWindow):
         def prepare():
             state = load_project(path)
             settings = state.analysis_settings or analysis
-            refresh_analysis(state.dataset, AnalysisSettings(**{k: v for k, v in settings.items() if k in AnalysisSettings.__dataclass_fields__}))
-            return state
+            diagnostics = refresh_analysis(
+                state.dataset,
+                AnalysisSettings(**{k: v for k, v in settings.items() if k in AnalysisSettings.__dataclass_fields__}),
+            )
+            return state, diagnostics
 
-        def apply(state):
+        def apply(result):
             try:
+                state, diagnostics = result
                 self._apply_project(state, path)
+                for message in diagnostics:
+                    self.logger.warning(message)
+                self._show_warning_popup("项目分析", diagnostics)
             except Exception as exc:  # noqa: BLE001 - keep the running app alive
                 self.logger.exception("应用项目失败")
                 QMessageBox.critical(self, "打开项目失败", str(exc))
@@ -2544,6 +2646,8 @@ class MainWindow(QMainWindow):
                     run.summary = metrics_from_fit(run, self.fits[run.run_id], run.summary)
                     self.metrics[run.run_id] = run.summary
             self._close_all_tabs_silent()
+            self._workspace_checks = dict(state.visible_runs)
+            self._workspace_cycles = copy.deepcopy(state.cycle_selection)
             self.dataset_model.set_dataset(
                 self.dataset,
                 state.visible_runs,
@@ -2557,18 +2661,7 @@ class MainWindow(QMainWindow):
                 self._add_plot_tab(spec)
             if state.active_plot < self.tabs.count():
                 self.tabs.setCurrentIndex(state.active_plot)
-            visible_ids = self.dataset_model.visible_run_ids()
-            selected_ids = self._selected_run_ids()
-            self.analysis_panel.update_dataset(
-                self.dataset,
-                selected_run_ids=selected_ids,
-                visible_run_ids=visible_ids,
-            )
-            self.results_panel.update_dataset(
-                self.dataset,
-                selected_run_ids=selected_ids,
-                visible_run_ids=visible_ids,
-            )
+            self._sync_tree_checks(self._active_plot_tab())
             self._update_plot_contexts()
         finally:
             self._loading_project = False
@@ -2657,8 +2750,13 @@ class MainWindow(QMainWindow):
             self.import_thread is not None and self.import_thread.isRunning()
         )
 
-    def _append_log(self, message: str) -> None:
-        self.log_view.appendPlainText(message)
+    def _append_log(self, message: str, level: int = logging.INFO) -> None:
+        if level >= logging.WARNING:
+            color = theme_color("error")
+            content = escape(message).replace("\n", "<br>")
+            self.log_view.appendHtml(f'<span style="color: {color}">{content}</span>')
+        else:
+            self.log_view.appendPlainText(message)
 
     def _restore_ui_state(self) -> None:
         ui = self.settings_service.ui_state
@@ -2822,7 +2920,10 @@ class MainWindow(QMainWindow):
         worker = TaskThread(task, self)
         self._tasks.append(worker)
         worker.completed.connect(apply)
-        worker.failed.connect(lambda message: QMessageBox.warning(self, "任务失败", message))
+        def report_failure(message):
+            self.logger.error("任务失败：%s", message)
+            self._show_warning_popup("任务失败", [message])
+        worker.failed.connect(report_failure)
         def finished():
             self._tasks.remove(worker)
             if cleanup:
@@ -2854,5 +2955,7 @@ class MainWindow(QMainWindow):
             return
         if self._options_dialog is not None:
             self._options_dialog.close()
+        if self._plot_warning_box is not None:
+            self._plot_warning_box.close()
         self._save_ui_state()
         super().closeEvent(event)

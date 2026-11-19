@@ -16,6 +16,8 @@ DEFAULT_TEXT_PRESET_LABEL = "默认图内文字（英文）"
 
 _STRING_SAMPLES = {
     "unit": "unit",
+    "sweep": "Forward",
+    "basis": "fitted",
     "label": "Sample",
     "model": "Rs-CPE",
     "x_term": "x",
@@ -91,7 +93,7 @@ TEXT_FIELDS: tuple[TextField, ...] = (
     _axis(_CV_CONTRIBUTION, "cv_contribution.y_area", "Y 轴标签（面积归一化）", "Current density ({unit})", ("unit",)),
     _axis(_CV_CONTRIBUTION, "cv_contribution.y_mass", "Y 轴标签（质量归一化）", "Specific current ({unit})", ("unit",)),
     _axis(_CV_CONTRIBUTION_VS_RATE, "cv_contribution_vs_rate.x", "X 轴标签", "Scan rate (V/s)"),
-    _axis(_CV_CONTRIBUTION_VS_RATE, "cv_contribution_vs_rate.y", "Y 轴标签", "Contribution (%)"),
+    _axis(_CV_CONTRIBUTION_VS_RATE, "cv_contribution_vs_rate.y", "Y 轴标签", "Contribution (% of {basis} charge)", ("basis",)),
     _axis(_CV_TRASATTI, "cv_trasatti.x", "X 轴标签", "$v^{-1/2}$ (V/s)$^{-1/2}$"),
     _axis(_CV_TRASATTI, "cv_trasatti.y_none", "Y 轴标签（原始电荷）", "Charge ({unit})", ("unit",)),
     _axis(_CV_TRASATTI, "cv_trasatti.y_area", "Y 轴标签（面积归一化）", "Charge density ({unit})", ("unit",)),
@@ -123,9 +125,9 @@ TEXT_FIELDS: tuple[TextField, ...] = (
     _title("cv_overlay", _CV_OVERLAY, ""),
     _title("cv_cap_scan", _CV_CAP_SCAN, "Capacitance vs scan rate"),
     _title("cv_current_scan", _CV_CURRENT_SCAN, "Current at {target:g} V", ("target",)),
-    _title("cv_bvalue", _CV_BVALUE, "b-value at {target:g} V", ("target",)),
-    _title("cv_contribution", _CV_CONTRIBUTION, "Dunn current decomposition at {scan_rate:g} V/s", ("scan_rate",)),
-    _title("cv_contribution_vs_rate", _CV_CONTRIBUTION_VS_RATE, "Contribution vs scan rate"),
+    _title("cv_bvalue", _CV_BVALUE, "b-value at {target:g} V ({sweep})", ("target", "sweep")),
+    _title("cv_contribution", _CV_CONTRIBUTION, "{sweep} sweep at {scan_rate:g} V/s", ("sweep", "scan_rate")),
+    _title("cv_contribution_vs_rate", _CV_CONTRIBUTION_VS_RATE, "{sweep} sweep ({low:g} to {high:g} V)", ("sweep", "low", "high")),
     _title("cv_trasatti", _CV_TRASATTI, "Trasatti charge separation"),
     _title("eis_nyquist", _EIS_NYQUIST, ""),
     _title("eis_bode", _EIS_BODE, ""),
@@ -150,13 +152,16 @@ TEXT_FIELDS: tuple[TextField, ...] = (
     _annotation(_CV_BVALUE, "cv_bvalue.b", "b 值行", "b = {b:.3f}", ("b",)),
     _annotation(_CV_BVALUE, "cv_bvalue.r2", "R² 行", "R² = {r2:.4f}", ("r2",)),
     _annotation(_CV_BVALUE, "cv_bvalue.n", "数据数行", "N = {n}", ("n",)),
-    _annotation(_CV_CONTRIBUTION, "cv_contribution.capacitive", "电容占比行", "Capacitive = {pct:.1f}%", ("pct",)),
+    _annotation(_CV_CONTRIBUTION, "cv_contribution.capacitive", "电容占比行", "Capacitive = {pct:.1f}% of {basis} charge", ("pct", "basis")),
     _annotation(_CV_CONTRIBUTION, "cv_contribution.mean_r2", "平均 R² 行", "Mean R² = {r2:.3f}", ("r2",)),
     _annotation(_CV_CONTRIBUTION_VS_RATE, "cv_contribution_vs_rate.n", "扫速数行", "N = {n} rates", ("n",)),
     _annotation(_CV_CONTRIBUTION_VS_RATE, "cv_contribution_vs_rate.mean_r2", "平均 R² 行", "Mean R² = {r2:.3f}", ("r2",)),
     _annotation(_CV_CONTRIBUTION_VS_RATE, "cv_contribution_vs_rate.bar_pct", "柱内百分比", "{pct:.0f}%", ("pct",)),
-    _annotation(_CV_TRASATTI, "cv_trasatti.q_cap", "q_cap 行", "q_cap = {q_cap:.4g} {unit}", ("q_cap", "unit")),
-    _annotation(_CV_TRASATTI, "cv_trasatti.fraction", "电容占比行", "Capacitive fraction = {pct:.1f}%", ("pct",)),
+    _annotation(_CV_TRASATTI, "cv_trasatti.q_cap", "外表面可及电荷", "q_outer = {q_cap:.4g} {unit}", ("q_cap", "unit")),
+    _annotation(_CV_TRASATTI, "cv_trasatti.q_total", "外推总电荷", "q_total = {q_total:.4g} {unit}", ("q_total", "unit")),
+    _annotation(_CV_TRASATTI, "cv_trasatti.fraction", "相对外推总电荷", "q_outer / q_total = {pct:.1f}%", ("pct",)),
+    _annotation(_CV_TRASATTI, "cv_trasatti.fraction_low_rate", "相对最低实测扫速电荷",
+                "q_outer / q({rate:g} V/s) = {pct:.1f}%", ("pct", "rate")),
     _annotation(_CV_TRASATTI, "cv_trasatti.r2", "R² 行", "R² = {r2:.4f}", ("r2",)),
     _annotation(_EIS_NYQUIST, "eis.model", "拟合模型行", "{model}", ("model",)),
     _annotation(_EIS_NYQUIST, "eis.rs", "Rs 行", "Rs = {value}", ("value",)),
@@ -164,7 +169,8 @@ TEXT_FIELDS: tuple[TextField, ...] = (
     _annotation(_EIS_NYQUIST, "eis.rct_approx", "Rct 估算行", "Rct ≈ {value}", ("value",)),
     _annotation(_EIS_NYQUIST, "eis.ceff", "Ceff 行", "Ceff = {value}", ("value",)),
     _annotation(_EIS_NYQUIST, "eis.cdl_approx", "Cdl 估算行", "Cdl ≈ {value}", ("value",)),
-    _annotation(_EIS_NYQUIST, "eis.f0", "f0 行", "f0 ≈ {value:.3g} Hz", ("value",)),
+    _annotation(_EIS_NYQUIST, "eis.f0", "实测峰频", "f_peak ≈ {value:.3g} Hz", ("value",)),
+    _annotation(_EIS_NYQUIST, "eis.fit_range", "拟合频段", "Fit range: {low:.3g} to {high:.3g} Hz", ("low", "high")),
     _annotation(_EIS_NYQUIST, "eis.r2", "R² 行", "R² = {value:.4f}", ("value",)),
     _annotation(_CP_GCD, "cp_gcd.current", "电流行", "I = {current}", ("current",)),
     _annotation(_CP_GCD, "cp_gcd.cycles", "循环数行", "{n} GCD cycles", ("n",)),
@@ -176,7 +182,8 @@ TEXT_FIELDS: tuple[TextField, ...] = (
     _legend("measured", "测量曲线", "Measured"),
     _legend("fitted_line", "拟合直线", "Fitted Line"),
     _legend("fitted_curve", "拟合曲线", "Fitted Curve"),
-    _legend("total", "总电流", "Total"),
+    _legend("total", "实测总电流", "Measured"),
+    _legend("dunn_fit", "拟合总电流", "Dunn fit"),
     _legend("capacitive", "电容分量", "Capacitive"),
     _legend("diffusive", "扩散分量", "Diffusive"),
     _legend("forward_current", "正扫电流", "Forward |i|"),
@@ -452,6 +459,8 @@ def axis_text(
     **context: Any,
 ) -> str:
     fixed_unit = _fixed_axis_unit(getattr(spec, "kind", ""), section, side)
+    if spec.kind == "cv_contribution_vs_rate":
+        context.setdefault("basis", spec.analysis_options.get("dunn_fraction_basis", "fitted"))
     if "unit" not in context and fixed_unit is not None:
         context["unit"] = fixed_unit
     override = axis_label_override(spec, section, side)

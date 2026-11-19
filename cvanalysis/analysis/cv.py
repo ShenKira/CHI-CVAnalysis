@@ -76,6 +76,8 @@ class ScanRatePoint:
     mass_mg: float | None
     valid_cycles: int
     integration_width_V: float | None = None
+    charge_C: float | None = None
+    integration_bounds_V: tuple[float, float] | None = None
 
 
 @dataclass
@@ -103,7 +105,7 @@ class TrasattiResult:
     capacitive_fraction_low_rate: float | None
     warnings: list[str] = field(default_factory=list)
     method: str = "trasatti"
-    method_version: int = METHOD_VERSION
+    method_version: int = 3
     q_total_C: float | None = None
     capacitive_fraction_total: float | None = None
 
@@ -120,7 +122,9 @@ class DunnResult:
     normalization: str = "none"
     warnings: list[str] = field(default_factory=list)
     method: str = "dunn"
-    method_version: int = METHOD_VERSION
+    method_version: int = 4
+    measured_current: np.ndarray | None = None
+    fraction_basis: str = "fitted"
 
 
 @dataclass
@@ -132,7 +136,9 @@ class DunnScanRateResult:
     normalization: str = "none"
     warnings: list[str] = field(default_factory=list)
     method: str = "dunn-scan-rate"
-    method_version: int = METHOD_VERSION
+    method_version: int = 4
+    potential_window: tuple[float, float] | None = None
+    fraction_basis: str = "fitted"
 
 
 # ---------------------------------------------------------------------------
@@ -300,11 +306,8 @@ def segment_cycles(run: CVRun, *, method: str = "robust") -> list[CVCycle]:
         second_points = np.column_stack(
             [potential[second[0] : second[1] + 1], current[second[0] : second[1] + 1]]
         )
-        # CHI data often contains the turning potential twice (end of one
-        # segment and start of the next).  Keeping both would mix opposite
-        # branch currents and bias the integral.  For the first branch keep the
-        # last duplicate at its start; for the second branch drop the shared
-        # turning point entirely.
+        # Preserve separate measured currents at duplicate turning potentials.
+        # A single shared turning sample belongs to the incoming branch.
         if first_points.shape[0] > 1:
             offset = 0
             while (
@@ -315,6 +318,9 @@ def segment_cycles(run: CVRun, *, method: str = "robust") -> list[CVCycle]:
             first_points = first_points[offset:]
         if second_points.shape[0] > 1:
             turn_potential = first_points[-1, 0]
+            end = len(first_points) - 1
+            while end > 0 and first_points[end - 1, 0] == turn_potential:
+                end -= 1
             offset = 0
             while (
                 offset < second_points.shape[0]
@@ -322,7 +328,13 @@ def segment_cycles(run: CVRun, *, method: str = "robust") -> list[CVCycle]:
             ):
                 offset += 1
             if offset < second_points.shape[0]:
-                second_points = second_points[offset:]
+                repeated_turn = offset > 1 or end < len(first_points) - 1
+                second_points = second_points[offset - 1 if repeated_turn else offset:]
+            first_points = first_points[:end + 1]
+        end = len(second_points) - 1
+        while end > 0 and second_points[end - 1, 0] == second_points[end, 0]:
+            end -= 1
+        second_points = second_points[:end + 1]
         up = _monotonic_branch(first_points if first[2] > 0 else second_points)
         down = _monotonic_branch(second_points if first[2] > 0 else first_points)
         if up.size < 2 or down.size < 2:
@@ -419,14 +431,7 @@ def _cycle_metrics(cycle: CVCycle, run: CVRun, sensitivity_factor: float) -> Non
     if overlap_high <= overlap_low:
         cycle.warning = "正反扫电位窗口没有重叠"
         return
-    full_low = float(np.nanmin(cycle.potential))
-    full_high = float(np.nanmax(cycle.potential))
-    full_width = full_high - full_low
-    overlap_width = overlap_high - overlap_low
-    if full_width > 0 and overlap_width >= 0.95 * full_width:
-        low, high = full_low, full_high
-    else:
-        low, high = overlap_low, overlap_high
+    low, high = overlap_low, overlap_high
     width = high - low
     if width <= 0:
         cycle.warning = "正反扫电位窗口没有重叠"
@@ -441,8 +446,10 @@ def _cycle_metrics(cycle: CVCycle, run: CVRun, sensitivity_factor: float) -> Non
             cycle.warning = f"电流超出 {sensitivity_factor:g} 倍灵敏度范围，本循环不参与统计"
             return
 
-    count = max(60, min(2000, max(up.shape[0], down.shape[0])))
-    grid = np.linspace(low, high, count)
+    grid = np.union1d(
+        up[(up[:, 0] >= low) & (up[:, 0] <= high), 0],
+        down[(down[:, 0] >= low) & (down[:, 0] <= high), 0],
+    )
     i_up = np.interp(grid, up[:, 0], up[:, 1])
     i_down = np.interp(grid, down[:, 0], down[:, 1])
     area = float(abs(_trapz(i_up - i_down, grid)))
@@ -523,6 +530,7 @@ def summarize_run(
     mean_cap_mass = mean_cap / mass_g if mass_g and np.isfinite(mean_cap) else None
 
     warnings = list(run.warnings)
+    warnings.extend(dict.fromkeys(cycle.warning for cycle in run.cycles if cycle.warning))
     if not valid:
         warnings.append("没有有效循环可用于统计")
     elif len(valid) < 2:
@@ -647,19 +655,23 @@ def collect_scan_rate_points(
             integration_width = float(np.mean(widths))
         else:
             integration_width = summary.voltage_window
+        areas = [cycle.integral_area_A_V for cycle in cycles if np.isfinite(cycle.integral_area_A_V)]
+        charge = float(np.mean(areas) / (2.0 * summary.scan_rate)) if areas else None
+        bounds = (
+            max(max(c.branch_up[0, 0], c.branch_down[0, 0]) for c in cycles),
+            min(min(c.branch_up[-1, 0], c.branch_down[-1, 0]) for c in cycles),
+        ) if cycles else None
         up_value = down_value = None
         if target_voltage is not None:
             up_value, down_value, _ = current_at_potential(run, target_voltage, cycles)
-        if up_value is None or not np.isfinite(up_value):
-            current_abs = None
-        elif down_value is None or not np.isfinite(down_value):
-            current_abs = abs(up_value)
-        elif current_mode == "up":
-            current_abs = abs(up_value)
-        elif current_mode == "down":
-            current_abs = abs(down_value)
-        else:
-            current_abs = (abs(up_value) + abs(down_value)) / 2.0
+        current_abs = None
+        if target_voltage is not None:
+            if current_mode in ("up", "down"):
+                value = up_value if current_mode == "up" else down_value
+                if np.isfinite(value):
+                    current_abs = abs(value)
+            elif np.isfinite(up_value) and np.isfinite(down_value):
+                current_abs = (abs(up_value) + abs(down_value)) / 2.0
         points.append(
             ScanRatePoint(
                 run_id=run.run_id,
@@ -675,37 +687,55 @@ def collect_scan_rate_points(
                 mass_mg=run.params.mass_mg,
                 valid_cycles=len(cycles),
                 integration_width_V=integration_width,
+                charge_C=charge,
+                integration_bounds_V=bounds,
             )
         )
     return sorted(points, key=lambda point: point.scan_rate)
 
 
-def fit_b_value(points: Iterable[ScanRatePoint]) -> BValueResult:
+def _average_by_scan_rate(rates: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    unique, groups = np.unique(rates, return_inverse=True)
+    return unique, np.bincount(groups, weights=values) / np.bincount(groups)
+
+
+def fit_b_value(
+    points: Iterable[ScanRatePoint], *, normalization: str = "none", allow_unfitted: bool = False,
+) -> BValueResult:
     usable = [
         point
         for point in points
-        if point.scan_rate > 0 and point.current_abs_A is not None and point.current_abs_A > 0
+        if np.isfinite(point.scan_rate) and point.scan_rate > 0
+        and point.current_abs_A is not None and np.isfinite(point.current_abs_A) and point.current_abs_A > 0
     ]
-    if len(usable) < 2:
-        raise AnalysisError("b 值分析至少需要两个不同扫速下的有效电流")
     rates = np.asarray([point.scan_rate for point in usable], dtype=float)
-    currents = np.asarray([point.current_abs_A for point in usable], dtype=float)
-    x = np.log10(rates)
-    y = np.log10(currents)
+    currents = np.asarray([
+        normalize_current(point.current_abs_A, normalization, area_cm2=point.area_cm2, mass_mg=point.mass_mg)
+        for point in usable
+    ], dtype=float)
+    valid = np.isfinite(currents) & (currents > 0)
+    rates, currents = rates[valid], currents[valid]
+    fit_rates, fit_currents = _average_by_scan_rate(rates, currents)
+    warnings = []
+    labels = [point.label for point, keep in zip(usable, valid) if keep]
+    if fit_rates.size < 2:
+        if not allow_unfitted:
+            raise AnalysisError("b 值分析至少需要两个不同扫速下的有效电流")
+        return BValueResult(rates, currents, labels, np.nan, np.nan, np.nan,
+                            ["b 值分析至少需要两个不同扫速下的有效电流"])
+    x = np.log10(fit_rates)
+    y = np.log10(fit_currents)
     slope, intercept = np.polyfit(x, y, 1)
     prediction = slope * x + intercept
     ss_res = float(np.sum((y - prediction) ** 2))
     ss_tot = float(np.sum((y - np.mean(y)) ** 2))
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-    warnings: list[str] = []
-    if len(usable) < 3:
-        warnings.append("只有两个扫速，b 值仅作粗略估计")
-    if np.unique(np.round(rates, 12)).size < 2:
-        warnings.append("扫速点重复，b 值不可靠")
+    if fit_rates.size == 2:
+        warnings.append("仅两个不同扫速，b 值拟合没有残差自由度")
     return BValueResult(
         scan_rates=rates,
         currents=currents,
-        labels=[point.label for point in usable],
+        labels=labels,
         slope=float(slope),
         intercept=float(intercept),
         r2=float(r2),
@@ -720,6 +750,19 @@ def scan_window_warning(
     absolute: float = 0.001,
 ) -> str | None:
     """Warn when scan-rate points come from incompatible potential windows."""
+    points = list(points)
+    bounds = [point.integration_bounds_V for point in points if point.integration_bounds_V is not None]
+    if bounds:
+        endpoints = np.asarray(bounds, dtype=float)
+        widths = endpoints[:, 1] - endpoints[:, 0]
+        tolerance = max(absolute, relative * float(np.mean(np.maximum(widths, 0))))
+        inconsistent_cycles = any(
+            point.integration_width_V is not None
+            and point.integration_width_V - (point.integration_bounds_V[1] - point.integration_bounds_V[0]) > tolerance
+            for point in points if point.integration_bounds_V is not None
+        )
+        if inconsistent_cycles or np.any(widths <= 0) or np.any(np.ptp(endpoints, axis=0) > tolerance):
+            return "所选循环的实际积分电位窗口不一致；扫速相关结果仅作参考"
     windows = [
         abs(float(point.voltage_window))
         for point in points
@@ -739,71 +782,71 @@ def scan_window_warning(
     )
 
 
-def trasatti_analysis(points: Iterable[ScanRatePoint]) -> TrasattiResult:
-    usable = [
-        point
-        for point in points
-        if point.scan_rate > 0
-        and point.capacitance_F is not None
-        and point.voltage_window is not None
-        and np.isfinite(point.capacitance_F)
-    ]
-    if len(usable) < 2:
-        raise AnalysisError("Trasatti 分析至少需要两个不同扫速")
+def trasatti_analysis(
+    points: Iterable[ScanRatePoint], *, normalization: str = "none", allow_unfitted: bool = False,
+) -> TrasattiResult:
+    usable = []
+    charges = []
+    for point in points:
+        if not np.isfinite(point.scan_rate) or point.scan_rate <= 0:
+            continue
+        charge = point.charge_C
+        if charge is None:
+            # Older callers may supply capacitance and width only.
+            width = point.integration_width_V or point.voltage_window
+            if point.capacitance_F is None or width is None or width <= 0:
+                continue
+            charge = point.capacitance_F * width
+        charge = normalize_charge(charge, normalization, area_cm2=point.area_cm2, mass_mg=point.mass_mg)
+        if charge is not None and np.isfinite(charge) and charge > 0:
+            usable.append(point)
+            charges.append(float(charge))
     rates = np.asarray([point.scan_rate for point in usable], dtype=float)
-    if np.unique(np.round(rates, 12)).size < 2:
-        raise AnalysisError("Trasatti 分析需要至少两个不同扫速")
-    widths = np.asarray(
-        [
-            point.integration_width_V
-            if point.integration_width_V is not None
-            and np.isfinite(point.integration_width_V)
-            and point.integration_width_V > 0
-            else point.voltage_window
-            for point in usable
-        ],
-        dtype=float,
-    )
-    charges = np.asarray(
-        [point.capacitance_F * width for point, width in zip(usable, widths)],
-        dtype=float,
-    )
-    x = 1.0 / np.sqrt(rates)
-    slope, intercept = np.polyfit(x, charges, 1)
+    charges = np.asarray(charges, dtype=float)
+    fit_rates, fit_charges = _average_by_scan_rate(rates, charges)
+    x = 1.0 / np.sqrt(fit_rates)
+    if fit_rates.size < 2:
+        message = "Trasatti 分析至少需要两个不同扫速下的正电荷"
+        if not allow_unfitted:
+            raise AnalysisError(message)
+        return TrasattiResult(rates, charges, 1.0 / np.sqrt(rates), np.nan, np.nan, np.nan,
+                              None, None, warnings=[message])
+    slope, intercept = np.polyfit(x, fit_charges, 1)
     prediction = slope * x + intercept
-    ss_res = float(np.sum((charges - prediction) ** 2))
-    ss_tot = float(np.sum((charges - np.mean(charges)) ** 2))
+    ss_res = float(np.sum((fit_charges - prediction) ** 2))
+    ss_tot = float(np.sum((fit_charges - np.mean(fit_charges)) ** 2))
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-    sqrt_rates = np.sqrt(rates)
-    _total_slope, total_intercept = np.polyfit(sqrt_rates, charges, 1)
-    q_total = float(total_intercept)
-    fraction_total = intercept / q_total if q_total > 0 else None
+    _, inverse_total = np.polyfit(np.sqrt(fit_rates), 1.0 / fit_charges, 1)
+    q_total = float(1.0 / inverse_total) if inverse_total > 0 else None
+    fraction_total = intercept / q_total if q_total is not None and np.isfinite(q_total) else None
     warnings: list[str] = []
     if intercept < 0:
-        warnings.append("拟合得到的电容电荷为负，扫速范围可能不足")
-    if len(usable) < 3:
-        warnings.append("少于三个扫速，线性拟合仅作参考")
+        warnings.append("外推得到的外表面可及电荷为负")
+    if fit_rates.size == 2:
+        warnings.append("仅两个不同扫速，Trasatti 外推没有残差自由度")
     window_warning = scan_window_warning(usable)
     if window_warning:
         warnings.append(window_warning)
-    if q_total <= 0:
-        warnings.append("q–v^{1/2} 外推得到的总电荷非正，无法计算 q_outer/q_total")
+    if fraction_total is None:
+        warnings.append("1/q–√v 外推的零扫速截距无效，无法计算总电荷")
     if fraction_total is not None and not -1e-6 <= fraction_total <= 1.0 + 1e-6:
         warnings.append("q_outer/q_total 超出 0–1，线性外推可能不适用")
-    lowest_index = int(np.argmin(rates))
-    q_low = float(charges[lowest_index])
-    q_diff = q_low - intercept
-    fraction = intercept / q_low if q_low > 0 else None
+        fraction_total = None
+    q_low = float(fit_charges[0])
+    fraction = intercept / q_low
+    if not -1e-6 <= fraction <= 1.0 + 1e-6:
+        warnings.append("外表面可及电荷与最低实测扫速电荷之比超出 0–1")
+        fraction = None
     return TrasattiResult(
         scan_rates=rates,
         charges_C=charges,
-        inv_sqrt_rate=x,
+        inv_sqrt_rate=1.0 / np.sqrt(rates),
         q_capacitive_C=float(intercept),
         slope=float(slope),
         r2=float(r2),
-        q_diffusive_low_rate_C=float(q_diff),
+        q_diffusive_low_rate_C=float(q_low - intercept) if fraction is not None else None,
         capacitive_fraction_low_rate=float(fraction) if fraction is not None else None,
-        q_total_C=q_total if np.isfinite(q_total) else None,
+        q_total_C=q_total if q_total is not None and np.isfinite(q_total) else None,
         capacitive_fraction_total=(
             float(fraction_total) if fraction_total is not None and np.isfinite(fraction_total) else None
         ),
@@ -830,11 +873,26 @@ def _representative_branch(
     return np.nanmedian(np.vstack(values), axis=0)
 
 
+@dataclass
+class _DunnFit:
+    grid: np.ndarray
+    rates: np.ndarray
+    measured: np.ndarray
+    k1: np.ndarray
+    k2: np.ndarray
+    mean_r2: float
+    normalization: str
+    warnings: list[str]
+
+
 def _dunn_fit_data(
     runs: Iterable[CVRun],
     normalization: str,
     cycle_selection: dict[str, list[int]] | None,
-):
+    branch: str,
+) -> _DunnFit:
+    if branch not in ("up", "down"):
+        raise AnalysisError("Dunn 分析需要选择正扫或反扫支路")
     runs = list(runs)
     selected_cycles = {
         run.run_id: [cycle for cycle in _cycles_for_run(run, cycle_selection) if cycle.valid]
@@ -845,23 +903,26 @@ def _dunn_fit_data(
         for run in runs
         if selected_cycles[run.run_id]
         and run.metadata.scan_rate
+        and np.isfinite(run.metadata.scan_rate)
         and run.metadata.scan_rate > 0
     ]
     if len(usable) < 2:
         raise AnalysisError("Dunn 分析至少需要两个不同扫速")
     rates = np.asarray([run.metadata.scan_rate for run in usable], dtype=float)
-    if np.unique(np.round(rates, 12)).size < 2:
+    unique_rates, groups = np.unique(rates, return_inverse=True)
+    if unique_rates.size < 2:
         raise AnalysisError("Dunn 分析需要至少两个不同扫速")
 
     lows = []
     highs = []
     for run in usable:
         for cycle in selected_cycles[run.run_id]:
-            if cycle.branch_up.shape[0] >= 2:
-                lows.append(float(cycle.branch_up[0, 0]))
-                highs.append(float(cycle.branch_up[-1, 0]))
+            points = cycle.branch_up if branch == "up" else cycle.branch_down
+            if points.shape[0] >= 2:
+                lows.append(float(points[0, 0]))
+                highs.append(float(points[-1, 0]))
     if not lows:
-        raise AnalysisError("没有可用的正扫分支")
+        raise AnalysisError("所选支路没有可用电位数据")
     low = max(lows)
     high = min(highs)
     if high <= low:
@@ -869,7 +930,7 @@ def _dunn_fit_data(
     grid = np.linspace(low, high, 200)
 
     currents = np.vstack(
-        [_representative_branch(run, grid, "up", selected_cycles[run.run_id]) for run in usable]
+        [_representative_branch(run, grid, branch, selected_cycles[run.run_id]) for run in usable]
     )
     warnings: list[str] = []
     if normalization == "area" and not all(run.params.has_area() for run in usable):
@@ -891,12 +952,16 @@ def _dunn_fit_data(
             ]
         )
 
+    if not np.isfinite(currents).all():
+        raise AnalysisError("所选支路缺少有限电流数据，无法进行 Dunn 拟合")
+    currents = np.stack([np.mean(currents[groups == i], axis=0) for i in range(len(unique_rates))])
+    rates = unique_rates
     sqrt_rates = np.sqrt(rates)
     # Dunn's usual linearization is i/sqrt(v) = k1*sqrt(v) + k2.
     # Regress in that space so scan rates receive the same weighting as the
     # transformed method, rather than minimizing errors in untransformed i.
     design = np.column_stack([sqrt_rates, np.ones_like(sqrt_rates)])
-    transformed = np.nan_to_num(currents, nan=0.0) / sqrt_rates[:, np.newaxis]
+    transformed = currents / sqrt_rates[:, np.newaxis]
     coefficients, *_ = np.linalg.lstsq(design, transformed, rcond=None)
     k1 = coefficients[0, :]
     k2 = coefficients[1, :]
@@ -911,9 +976,45 @@ def _dunn_fit_data(
         if ss_tot > 0:
             r2_values.append(1.0 - ss_res / ss_tot)
     mean_r2 = float(np.mean(r2_values)) if r2_values else float("nan")
-    if len(usable) < 3:
-        warnings.append("少于三个扫速，Dunn 分解结果的可靠性有限")
-    return grid, rates, k1, k2, mean_r2, normalization, warnings
+    if len(rates) < 3:
+        warnings.append("仅两个不同扫速，直线拟合没有残差自由度")
+    if high - low < 0.95 * max(h - l for l, h in zip(lows, highs)):
+        warnings.append(f"支路共同窗口缩小至 {low:g}–{high:g} V")
+
+    # Ignore roundoff in a vanishing component (e.g. an ideal capacitor).
+    cap = k1 * rates[-1]
+    diff = k2 * sqrt_rates[-1]
+    tolerance = 1e-12 * np.maximum(np.abs(cap), np.abs(diff))
+    opposing = (np.sign(cap) != np.sign(diff)) & (np.minimum(np.abs(cap), np.abs(diff)) > tolerance)
+    if opposing.any():
+        warnings.append(f"{opposing.mean():.1%} 电位点的拟合分量异号，储能机理占比需谨慎解释")
+    return _DunnFit(grid, rates, currents, k1, k2, mean_r2, normalization, warnings)
+
+
+def _dunn_fractions(fit: _DunnFit, rates: np.ndarray, measured: np.ndarray | None, basis: str):
+    """The common sweep direction and 1/v cancel in each signed charge ratio."""
+    cap = rates * _trapz(fit.k1, fit.grid)
+    diff = np.sqrt(rates) * _trapz(fit.k2, fit.grid)
+    if basis == "fitted":
+        denominator = cap + diff
+        scale = (rates * _trapz(np.abs(fit.k1), fit.grid)
+                 + np.sqrt(rates) * _trapz(np.abs(fit.k2), fit.grid))
+        label = "拟合"
+    elif basis == "measured":
+        if measured is None:
+            return np.full_like(rates, np.nan), np.full_like(rates, np.nan)
+        curves = np.atleast_2d(measured)
+        denominator = _trapz(curves, fit.grid, axis=1)
+        scale = _trapz(np.abs(curves), fit.grid, axis=1)
+        label = "实测"
+    else:
+        raise AnalysisError("Dunn 占比基准必须为拟合分量之和或实测净电荷")
+    resolved = np.abs(denominator) > np.sqrt(np.finfo(float).eps) * scale
+    if not resolved.all():
+        missing = ", ".join(f"{v:g}" for v in rates[~resolved])
+        fit.warnings.append(f"{missing} V/s {label}净电荷为零或接近抵消，占比未定义")
+    return (np.divide(cap, denominator, out=np.full_like(rates, np.nan), where=resolved),
+            np.divide(diff, denominator, out=np.full_like(rates, np.nan), where=resolved))
 
 
 def dunn_analysis(
@@ -922,28 +1023,40 @@ def dunn_analysis(
     normalization: str = "none",
     selected_scan_rate: float | None = None,
     cycle_selection: dict[str, list[int]] | None = None,
+    branch: str = "up",
+    fraction_basis: str = "fitted",
 ) -> DunnResult:
-    grid, rates, k1, k2, mean_r2, normalization, warnings = _dunn_fit_data(
-        runs, normalization, cycle_selection
-    )
+    fit = _dunn_fit_data(runs, normalization, cycle_selection, branch)
+    rates = fit.rates
     if selected_scan_rate is None:
-        selected_scan_rate = float(np.median(rates))
+        selected_scan_rate = float(rates[(len(rates) - 1) // 2])
+    if not np.isfinite(selected_scan_rate):
+        raise AnalysisError("分解扫速必须为有限数值")
+    if selected_scan_rate < rates[0] or selected_scan_rate > rates[-1]:
+        fit.warnings.append("请求扫速超出实测范围，已使用最近的实测扫速")
     selected_scan_rate = min(max(selected_scan_rate, float(np.min(rates))), float(np.max(rates)))
-    capacitive = k1 * selected_scan_rate
-    diffusive = k2 * np.sqrt(selected_scan_rate)
-    total = capacitive + diffusive
-    denominator = float(np.sum(np.abs(capacitive)) + np.sum(np.abs(diffusive)))
-    fraction = float(np.sum(np.abs(capacitive)) / denominator) if denominator > 0 else float("nan")
+    index = int(np.argmin(np.abs(rates - selected_scan_rate)))
+    measured = None
+    if np.isclose(rates[index], selected_scan_rate, rtol=1e-12, atol=0):
+        selected_scan_rate = float(rates[index])
+        measured = fit.measured[index]
+    else:
+        fit.warnings.append("该扫速无实测曲线，仅显示模型预测")
+    fractions, _ = _dunn_fractions(fit, np.array([selected_scan_rate], dtype=float), measured, fraction_basis)
+    capacitive = fit.k1 * selected_scan_rate
+    diffusive = fit.k2 * np.sqrt(selected_scan_rate)
     return DunnResult(
-        potential=grid,
-        total_current=total,
+        potential=fit.grid,
+        total_current=capacitive + diffusive,
+        measured_current=measured,
         capacitive_current=capacitive,
         diffusive_current=diffusive,
         scan_rate=selected_scan_rate,
-        capacitive_fraction=fraction,
-        mean_r2=mean_r2,
-        normalization=normalization,
-        warnings=warnings,
+        capacitive_fraction=float(fractions[0]),
+        fraction_basis=fraction_basis,
+        mean_r2=fit.mean_r2,
+        normalization=fit.normalization,
+        warnings=fit.warnings,
     )
 
 
@@ -952,41 +1065,19 @@ def dunn_fraction_vs_scan_rate(
     *,
     normalization: str = "none",
     cycle_selection: dict[str, list[int]] | None = None,
+    branch: str = "up",
+    fraction_basis: str = "fitted",
 ) -> DunnScanRateResult:
-    """Return capacitive/diffusive percentages at each measured scan rate.
-
-    The Dunn coefficients k1(V), k2(V) are fitted once across all scan rates;
-    the fraction at each rate uses integrated absolute capacitive and
-    diffusive current contributions over the common potential window.
-    """
-    grid, rates, k1, k2, mean_r2, normalization, warnings = _dunn_fit_data(
-        runs, normalization, cycle_selection
-    )
-    capacitive_current = k1[np.newaxis, :] * rates[:, np.newaxis]
-    diffusive_current = k2[np.newaxis, :] * np.sqrt(rates)[:, np.newaxis]
-    capacitive_area = _trapz(np.abs(capacitive_current), grid, axis=1)
-    diffusive_area = _trapz(np.abs(diffusive_current), grid, axis=1)
-    denominator = capacitive_area + diffusive_area
-    capacitive_fraction = np.divide(
-        capacitive_area,
-        denominator,
-        out=np.full_like(capacitive_area, np.nan, dtype=float),
-        where=denominator > 0,
-    )
-
-    unique_rates: list[float] = []
-    fractions: list[float] = []
-    for rate in np.unique(np.round(rates, 12)):
-        mask = np.isclose(rates, rate, rtol=0.0, atol=1e-12)
-        value = float(np.nanmean(capacitive_fraction[mask]))
-        unique_rates.append(float(rate))
-        fractions.append(value)
-    fraction_array = np.asarray(fractions, dtype=float)
+    """Return signed charge fractions relative to the fitted or measured sweep."""
+    fit = _dunn_fit_data(runs, normalization, cycle_selection, branch)
+    cap, diff = _dunn_fractions(fit, fit.rates, fit.measured, fraction_basis)
     return DunnScanRateResult(
-        scan_rates=np.asarray(unique_rates, dtype=float),
-        capacitive_fraction=fraction_array,
-        diffusive_fraction=1.0 - fraction_array,
-        mean_r2=mean_r2,
-        normalization=normalization,
-        warnings=warnings,
+        scan_rates=fit.rates,
+        capacitive_fraction=cap,
+        diffusive_fraction=diff,
+        fraction_basis=fraction_basis,
+        potential_window=(float(fit.grid[0]), float(fit.grid[-1])),
+        mean_r2=fit.mean_r2,
+        normalization=fit.normalization,
+        warnings=fit.warnings,
     )

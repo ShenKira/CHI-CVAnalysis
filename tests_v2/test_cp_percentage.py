@@ -18,7 +18,8 @@ def test_capacity_series_and_reference_cycle(synthetic_cp_run, series, count):
         "capacity_percent_mode": "cycle", "capacity_percent_cycle": 1,
     })
     fig = Figure()
-    assert not draw_cp_capacity(fig, Dataset(cp_runs=[run]), spec, BUILTIN_PRESETS["daily"])
+    warnings = draw_cp_capacity(fig, Dataset(cp_runs=[run]), spec, BUILTIN_PRESETS["daily"])
+    assert warnings and all("IR 降留空" in warning for warning in warnings)
     assert len(fig.axes[0].lines) == count
     if series in ("both", "discharge"):
         assert fig.axes[0].lines[0].get_ydata()[0] == pytest.approx(100)

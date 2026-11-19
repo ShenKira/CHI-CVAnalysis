@@ -30,10 +30,13 @@ class EISMetrics:
     low_freq_hz: float | None
     points: int
     semicircle_detected: bool
-    recommended_model: str = "rct_cpe"
+    recommended_model: str | None = None
     warnings: list[str] = field(default_factory=list)
     method: str = "geometric"
     method_version: int = METHOD_VERSION
+    fit_model: str | None = None
+    fit_frequency_range_hz: tuple[float, float] | None = None
+    effective_capacitance_F: float | None = None
 
 
 def _interp_log_frequency(freq: np.ndarray, values: np.ndarray, target: float) -> float | None:
@@ -85,25 +88,40 @@ def analyze_eis(run: EISRun, *, phase_frequencies: tuple[float, ...] = (1.0, 0.1
             low_freq_hz=None,
             points=0,
             semicircle_detected=False,
-            recommended_model="rs_cpe",
             warnings=warnings,
         )
 
-    rs = float(np.nanmin(z_real)) if z_real.size else None
+    high = (freq >= freq[0] / 2) & (z_real >= 0)
+    rs = float(np.median(z_real[high][:5])) if high.any() else None
+    if rs is None:
+        warnings.append("高频端没有有效的非负阻抗实部，无法估算 Rs")
     neg_imag = -z_imag
-    peak_index = int(np.argmax(neg_imag)) if neg_imag.size else -1
-    semicircle = 0 < peak_index < len(freq) - 1 and neg_imag[peak_index] > 0
+    peak_index = int(np.argmax(neg_imag))
+    peak = float(neg_imag[peak_index])
+    interior_peak = 0 < peak_index < len(freq) - 1 and peak > 0
+    f_peak = float(freq[peak_index]) if interior_peak else None
+    span = float(z_real[-1] - z_real[0])
+    arc_candidate = (
+        freq.size >= 7 and 2 <= peak_index <= len(freq) - 3 and peak > 0 and span > 0
+        and abs(neg_imag[0]) <= .2 * peak and abs(neg_imag[-1]) <= .2 * peak
+        and np.all(np.diff(z_real) >= -.02 * span)
+        and np.all(np.diff(neg_imag[:peak_index + 1]) >= -.03 * peak)
+        and np.all(np.diff(neg_imag[peak_index:]) <= .03 * peak)
+        and np.all(neg_imag >= -.03 * peak)
+    )
+    semicircle = False
+    if arc_candidate:
+        distances = np.hypot(z_real - (z_real[0] + span / 2), neg_imag) / (span / 2)
+        semicircle = abs(2 * peak / span - 1) <= .10 and np.max(np.abs(distances - 1)) <= .10
     if semicircle:
-        rct = 2.0 * float(neg_imag[peak_index])
-        f_peak = float(freq[peak_index])
+        rct = 2.0 * peak
         cdl = 1.0 / (2.0 * np.pi * f_peak * rct) if rct > 0 and f_peak > 0 else None
         tau = 1.0 / (2.0 * np.pi * f_peak) if f_peak > 0 else None
     else:
         rct = None
-        f_peak = None
         cdl = None
         tau = None
-        warnings.append("未检测到完整半圆，Rct/Cdl 仅能通过拟合获得")
+        warnings.append("未检测到覆盖两侧且近似理想的单弧，几何 Rct/Cdl 留空")
 
     phase_1hz = _interp_log_frequency(freq, phase, 1.0)
     mag_1hz = _interp_log_frequency(freq, z_mag, 1.0)
@@ -128,7 +146,7 @@ def analyze_eis(run: EISRun, *, phase_frequencies: tuple[float, ...] = (1.0, 0.1
         low_freq_hz=float(np.min(freq)) if freq.size else None,
         points=int(freq.size),
         semicircle_detected=semicircle,
-        recommended_model="rct_cpe" if semicircle else "rs_cpe",
+        recommended_model="rct_cpe" if arc_candidate else None,
         warnings=warnings,
     )
 
@@ -137,23 +155,20 @@ def metrics_from_fit(run: EISRun, fit: EISFitResult, base: EISMetrics | None = N
     """Combine geometric metrics with fitted Rs/Rct/Cdl."""
     base = base or analyze_eis(run)
     parameters = fit.parameters
-    rs = parameters.get("Rs_ohm", base.rs_ohm)
-    rct = parameters.get("Rct_ohm", base.rct_ohm)
-    cdl = parameters.get("C_eff_F", base.cdl_F)
-    tau = parameters.get("tau_s", base.tau_s)
-    f_peak = parameters.get("f0_Hz", base.f_peak_hz) if base.semicircle_detected else base.f_peak_hz
+    rs = parameters.get("Rs_ohm")
+    rct = parameters.get("Rct_ohm")
+    cdl = parameters.get("C_eff_F") if rct is not None else None
     warnings = list(base.warnings)
     warnings.extend(fit.warnings)
     if rs is not None and base.rs_ohm is not None and rs < max(1e-9, 1e-4 * base.rs_ohm):
-        warnings.append("拟合 Rs 接近 0，已使用高频最小实部作为 Rs 估计")
-        rs = base.rs_ohm
+        warnings.append("拟合 Rs 接近 0，且明显低于高频估计，请核对电路和频段")
     return EISMetrics(
         run_id=base.run_id,
         rs_ohm=rs,
         rct_ohm=rct,
-        f_peak_hz=f_peak,
+        f_peak_hz=base.f_peak_hz,
         cdl_F=cdl,
-        tau_s=tau,
+        tau_s=parameters.get("tau_s"),
         phase_at_1hz_deg=base.phase_at_1hz_deg,
         mag_at_1hz_ohm=base.mag_at_1hz_ohm,
         low_freq_mag_ohm=base.low_freq_mag_ohm,
@@ -165,6 +180,9 @@ def metrics_from_fit(run: EISRun, fit: EISFitResult, base: EISMetrics | None = N
         recommended_model=base.recommended_model,
         warnings=warnings,
         method="equivalent-circuit-fit",
+        fit_model=fit.model_label,
+        fit_frequency_range_hz=(float(np.min(fit.frequencies)), float(np.max(fit.frequencies))) if fit.frequencies.size else None,
+        effective_capacitance_F=fit.c_eff_F,
     )
 
 

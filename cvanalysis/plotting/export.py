@@ -54,16 +54,7 @@ def render_plot(
     role_color_overrides = spec.analysis_options.get("color_overrides_by_role")
     if not spec.kind.startswith(("cv_", "eis_", "cp_", "lsv_", "it_")):
         figure.clear()
-        ax = figure.add_subplot(111)
-        ax.text(
-            0.5,
-            0.5,
-            f"未知绘图类型: {spec.kind}",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-        )
-        ax.set_axis_off()
+        figure.add_subplot(111).set_axis_off()
         apply_color_overrides(figure, color_overrides, role_color_overrides)
         return [f"未知绘图类型: {spec.kind}"]
 
@@ -113,6 +104,9 @@ def render_plot(
     apply_log_tick_formats(figure, spec.analysis_options)
     selected_ids = set(spec.run_ids)
     selected_runs = [run for run in dataset_runs(dataset) if run.run_id in selected_ids]
+    for run in selected_runs:
+        diagnostics = dict.fromkeys([*run.warnings, *getattr(getattr(run, "summary", None), "warnings", ())])
+        warnings.extend(f"{run.display_name}：{message}" for message in diagnostics if message not in warnings)
     blank_legend = spec.kind != "cp_capacity" and bool(selected_runs) and all(
         is_blank_legend_template(effective_template(run, spec)) for run in selected_runs
     )
@@ -133,7 +127,7 @@ def render_plot(
         layout_style = style.with_overrides({"legend": True})
     _finish_layout(figure, replace(spec, show_legend=False) if blank_legend else spec, layout_style)
     apply_rebuilt_legend_text_overrides(figure, color_overrides, role_color_overrides)
-    return warnings
+    return list(dict.fromkeys(warnings))
 
 
 def render_to_new_figure(
@@ -145,12 +139,13 @@ def render_to_new_figure(
     fits: dict[str, EISFitResult] | None = None,
     metrics: dict[str, EISMetrics] | None = None,
     text_values: dict | None = None,
+    diagnostics: list[str] | None = None,
 ) -> Figure:
     """Render a fresh figure with the preset's print size (for export)."""
     style = style.with_overrides(paper_overrides(spec.paper_layout, style))
     figure = Figure(figsize=style.figure_size, dpi=style.save_dpi)
     figure._paper_layout_enabled = bool(spec.paper_layout.get("enabled"))
-    render_plot(
+    messages = render_plot(
         figure,
         dataset,
         spec,
@@ -160,6 +155,8 @@ def render_to_new_figure(
         metrics=metrics,
         text_values=text_values,
     )
+    if diagnostics is not None:
+        diagnostics.extend(messages)
     return figure
 
 
@@ -172,6 +169,7 @@ def render_svg_bytes(
     fits: dict[str, EISFitResult] | None = None,
     metrics: dict[str, EISMetrics] | None = None,
     text_values: dict | None = None,
+    diagnostics: list[str] | None = None,
 ) -> bytes:
     """Render a plot as SVG bytes for vector clipboard/export workflows."""
     figure = render_to_new_figure(
@@ -182,6 +180,7 @@ def render_svg_bytes(
         fits=fits,
         metrics=metrics,
         text_values=text_values,
+        diagnostics=diagnostics,
     )
     buffer = BytesIO()
     figure.savefig(buffer, format="svg", facecolor=figure.get_facecolor())
