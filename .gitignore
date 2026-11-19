@@ -97,18 +97,13 @@ venv/
 env/
 
 # Local handoff notes (may contain workspace state or local data names)
-/Vibe_Coding_Outline.md
-/Vibe_md/
-/docs/IMPLEMENTATION_LOG.md
-/README_LOCAL.md
+/AGENTS.md
+/.agent/
 /docs/NEW_TECHNIQUES_HANDOFF.md
 /docs/GUI_AUDIT_20261116.md
 /docs/GUI_MAINLINE_MIGRATION_PLAN.md
 /docs/CONTEXT_MENU_PLAN.md
 /assets/icons/concepts-20261116/PROMPTS.md
-
-# Local release notes draft (copy into GitHub Release)
-/update_detailed.md
 
 # Local reference images / agent caches
 /KON!/

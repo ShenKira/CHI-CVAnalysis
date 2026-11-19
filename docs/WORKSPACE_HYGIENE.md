@@ -16,7 +16,7 @@
 
 - 源码：`cvanalysis/`、`tests_v2/`、`start_gui.py`、`cv_analysis.py`、`eis_analysis.py`
 - 正式文档：`README.md`、`Build.md`、`docs/`、`DESIGN.md`
-- 本地交接资料：`Vibe_Coding_Outline.md`、`README_LOCAL.md`、`Vibe_md/`
+- 本地交接资料：`AGENTS.md`、`.agent/`
 - 用户数据：用户测量数据、项目文件及分析导出
 - 用户配置：`config.json`、`themes.json`
 - 构建记录和发布说明：`Build.md`、`build_cache/logs/`
@@ -29,9 +29,8 @@ CVAnalysis/
 ├─ cvanalysis/              # 生产代码
 ├─ tests_v2/                # 测试
 ├─ docs/                    # 正式开发文档
-├─ Vibe_md/                 # 本地交接资料，Git 忽略
-├─ Vibe_Coding_Outline.md
-├─ README_LOCAL.md
+├─ AGENTS.md                # 本地 Agent 入口，Git 忽略
+├─ .agent/                  # 本地交接资料，Git 忽略
 ├─ .local/                  # 一次性脚本、截图、临时 JSON，Git 忽略
 ├─ .test_tmp/               # pytest basetemp，测试结束后清理
 ├─ build_cache/             # Nuitka 缓存与构建日志
@@ -48,6 +47,7 @@ CVAnalysis/
 | 目录 | 内容 | 保留策略 |
 |---|---|---|
 | `.local/` | 一次性脚本、截图、调试 JSON | 任务结束即删；最长 7 天 |
+| `.agent/` | 本地 Agent 交接资料 | 长期保留，不自动清理；跨机器交接显式授权 |
 | `.test_tmp/` | pytest basetemp | 测试成功自动删除；失败保留供排查 |
 | `__pycache__/`、`.pytest_cache/` | Python/pytest 缓存 | 随时可删 |
 | `build_cache/` | Nuitka 缓存和日志 | 缓存可删；`logs/` 保留最近约 90 天或 20 个日志 |

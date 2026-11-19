@@ -37,7 +37,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_DIR_RE = re.compile(r"^CVAnalysis_(OneFile|StandAlone)_v(\d+(?:\.\d+)*)$")
 STANDALONE_ZIP_RE = re.compile(r"^CVAnalysis_StandAlone_v(\d+(?:\.\d+)*)\.zip$")
-SKIP_PYCACHE_ROOTS = {".git", ".opencode_cache", "build_cache", ".test_tmp", ".local"}
+SKIP_PYCACHE_ROOTS = {".git", ".opencode_cache", "build_cache", ".test_tmp", ".local", ".agent"}
 USER_DATA_NAMES = {
     "config.json",
     "themes.json",
@@ -51,10 +51,9 @@ USER_DATA_NAMES = {
     "I-T.cvproj",
     "LSV.cvproj",
     "README.md",
-    "README_LOCAL.md",
+    "AGENTS.md",
     "Build.md",
     "DESIGN.md",
-    "Vibe_Coding_Outline.md",
 }
 SAFE_BUILD_CACHE_DIRS = (
     "build_cache/clcache",
@@ -294,7 +293,7 @@ def deep_candidates() -> list[Candidate]:
         if path.exists():
             candidates.append(Candidate(path, "intermediate experiment output"))
     opencode_cache = ROOT / ".opencode_cache"
-    skip_for_deep = {".git", "build_cache", ".test_tmp", ".local"}
+    skip_for_deep = {".git", "build_cache", ".test_tmp", ".local", ".agent"}
     for path in find_pycache_dirs(skip_roots=skip_for_deep):
         try:
             path.relative_to(opencode_cache)
