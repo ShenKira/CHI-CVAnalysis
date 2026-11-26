@@ -17,6 +17,7 @@
 - **当前图选项浮窗**：双击右下角“当前图”标题可在独立窗口编辑，关闭窗口或点击原位置的“返回工作区”后恢复面板；尚未应用的输入保留。
 - **长文件名处理**：文件名超过显示上限时自动缩短；同类型文件名相似且较长时，整组使用 `#文件序号 + 电位/扫速` 紧凑图例，避免 1.5 V / 2.5 V 被截成同名。完整文件名、路径和扫速/窗口仍显示在左侧详情区。
 - **循环级控制**：数据集树中可勾选文件或单个循环，实时更新当前图。每个标签页独立保存文件和循环选择。
+- **标签页命名**：双击图标签直接编辑名称，Enter 或失焦时保存，Esc 取消。标签右键可重命名或恢复自动名称，清空名称也会恢复自动名称。名称随项目保存，图内标题单独设置。
 - **每图独立数据选择**：画布右键“本图数据与图例...”或“工具 → 当前图数据与图例...”可选择该图绘制的文件、CV 循环及图例模板。
 - **图例模板与别名**：可为数据设置默认别名模板（如 `{file_n}-{cycle_n}`），也可在当前图单独覆盖，或为单个数据设置“图例/别名”。模板支持文件序号 `{file_n}`、文件内原始循环号 `{cycle_n}`、人工别名 `{Alias}`，以及 `{File_Name}`、`{Scan_Rate}`、`{CV_Window}`、`{Cycle_Number}`、`{Low_Freq}` 等字段。左树“图例/别名”列显示人工别名或自动紧凑/缩写结果；模板优先于别名。CV 叠加图默认每个数据的循环图例上限为 10；超过时按连续循环范围自动合并（例如 500 个循环显示为 `Cycle 1-50`、`Cycle 51-100`……），可在“分析参数”的“循环图例上限”中调整，设为 0 可恢复逐循环图例。
 - **可拖拽布局与列宽**：数据集、左下角 CV/EIS/CP 结果表、日志和右侧当前图设置之间均可拖动分隔条；数据树、结果表和每图数据对话框的所有列均可拖动，双击列边界或右键表头可自动适配。窗口几何、分隔比例和列宽会被记住。
@@ -27,6 +28,7 @@
 - **紧凑排版**：最终坐标范围、单位和刻度确定后才执行统一排版，避免自动范围的长刻度标签在切换到手动范围后留下大块左边距；论文图内/图外图例重排幂等，不会重复叠加图例。
 - **上/右边框刻度**：显示上/右边框时可分别关闭上边框刻度或右边框刻度；边框隐藏时对应刻度自动隐藏，主刻度和次刻度同时生效。
 - **论文缩放补偿**：输入图片占版心宽度比例（0.5/0.33/0.25）、版心宽度和正文字号（默认 10 pt）。按“论文目标字号 ÷ 插入缩放比例”计算源图字体；占比严格小于 0.33 时，为保证固定画布可排版，所有图中文字再缩至计算值的 80%。界面显示源图字号和论文实际字号，详见 [修正报告](docs/PROJECT_REVIEW.md)。
+- **论文线宽补偿**：在「当前图 → 论文尺寸与字号」的图例设置下启用线宽补偿。自动模式在图片占版心 ≥ 0.5 时使用全宽（×1.00），较小时使用半宽（×0.60）。也可固定选用全宽、半宽，或通过滑条与输入框指定 ×0.10–×2.00。曲线、边框、刻度、网格和辅助线按插入比例补偿。样式面板显示基准值，预览标出修正系数、源图线宽和论文线宽。设置随图保存，点大小、刻度长度和柱宽沿用各自设置。
 - **图例布局**：可设自动、图内或图外，自动外置阈值默认 0.5；图例列数可按可用宽度/高度自动适配或手动设为 1–8 列。普通图例过宽时会自动移到图外并保留轴标题空间；外置图例根据坐标轴结构安排在底部、顶部或拟合图右侧，多坐标轴共享并按曲线身份去重，不会因短标签相同而丢曲线。
 - **多选与清空**：支持 Ctrl/Shift 多选、全选、删除选中和一键清空当前数据集（不删除源文件）。
 - **CV 快速分析**：电容-扫速曲线、固定电位电流-扫速、b 值、Trasatti 电荷分解、Dunn 电流分解，以及不同扫速下的贡献占比柱状图。
@@ -66,7 +68,7 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 
 ### 2.1 版本与升级
 
-- 当前版本 **v2.2.0**：Dunn 支持拟合与实测两种 100% 基准及并排/堆叠柱形，数据树勾选与当前图实时联动；修正 b 值/Trasatti 扫速校验、Trasatti 总电荷外推、CV 逐循环电荷、CP/GCD 完整性与 IR 降、EIS 快速几何估计；分析与绘图警告移到非模态弹窗和底栏红字日志。2.1.0 的 Liquid Glass 界面、CP 多文件拼接、LSV/I-T 参考归一化与安全变量格式继续保留。
+- 当前版本 **v2.3.0**：Dunn v5 支持按支路的电位选区、拟合/实测 100% 基准、闭合差/残差/抵消诊断与三份 CSV 导出；CP/GCD 增加 CHI 采样网格校验、电位切换时序与 CE 范围；新增图标签重命名与论文线宽补偿。2.2.0 的 Dunn 双基准、左侧实时勾选、b 值/Trasatti、CP/GCD 完整性与 EIS 几何估计继续保留。
 - 文本模板支持 `{value:.2f}` 等受限格式，指定精度时保留末尾零；先替换已知变量，再解析 `$...$` 数学公式和公式外的 `\n`。不执行 Python 表达式或外部 TeX。
 - 已有 v1 克隆：没有本地修改时执行 `git pull --ff-only`；有修改时先提交到自己的分支或备份，再更新；不确定时直接重新 clone。
 - 旧 GUI 已移除；v1 `config.json` 会自动迁移为 v2 配置。
@@ -142,11 +144,12 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 - 固定电位电流：在目标电位处对正扫/反扫分支插值，取循环中位数。
 - b 值按 `log|i| = b log v + log a` 回归。新图默认正扫，当前图可切换反扫或正反扫幅值平均。旧图保留以前的选项。不同有效扫速少于两个时只显示数据点。
 - Trasatti 先对每个有效循环算电荷，再汇总同一文件。同扫速数据取平均，每个不同扫速等权回归。对 `q–1/√v` 外推得到 `q_outer`，对 `1/q–√v` 外推后取截距倒数得到 `q_total`。图中分别注明相对于外推总电荷和最低实测扫速电荷的比值。电位窗口检查比较实际积分上下限。
-- Dunn 分析在当前图设置中选择正扫（默认）或反扫。两张图都在所选支路的共同电位窗口上，以 `i/√v` 对 `√v` 逐电位做线性回归，斜率为 `k1`，截距为 `k2`。每个文件取有效选中循环的电流中位数，同扫速文件按所选单位归一化后等权平均，每个不同扫速参与一次拟合。[Wang 等，式（7）–（8）与图 7](https://doi.org/10.1021/jp074464w)
+- Dunn 分析在当前图设置中选择正扫（默认）或反扫。两张图使用各扫速共同覆盖的电位区间，可通过「电位选区…」拖动或输入边界。所选支路以 `i/√v` 对 `√v` 逐电位做线性回归，斜率为 `k1`，截距为 `k2`。每个文件取有效选中循环的电流中位数，同扫速文件按所选单位归一化后等权平均，每个不同扫速参与一次拟合。自动选择排除标记为部分的循环，手动选中的部分循环会提示并参与覆盖区检查。[Wang 等，式（7）–（8）与图 7](https://doi.org/10.1021/jp074464w)
   - “Dunn 电流分解”叠加实测总电流、拟合总电流、电容和扩散分量。阴影覆盖零线与电容电流之间的区域。选取两次测量之间的扫速时仅显示预测曲线。
   - 创建任一 Dunn 图时，弹窗可选择整张图的 100% 基准。默认用两个拟合分量的净电荷之和，另一模式用该扫速的实测支路净电荷。当前图设置中可切换并保存。各分量均按同一电位窗口积分 `Q = ∫i dt`，保留电流符号。分量异号时可能出现负值或超过 100%，所选分母接近抵消时留空。非实测扫速仅拟合模式可以计算占比。
   - “贡献占比-扫速”可在当前图设置中选择并排、堆叠或随基准自动。自动模式下，拟合基准默认堆叠，扩散在下、电容在上。实测基准默认并排。堆叠时异号分量分别在零线两侧绘制。实测基准下两项合计偏离 100% 反映积分后的拟合偏差。电容项包含双电层和可能的赝电容响应。
-  - Dunn 方法版本 4 将基准随图保存。没有基准字段的历史图默认以拟合净电荷为基准。需复现版本 3 时选择实测模式。更早版本以两分量绝对面积之和归一化，分量异号时其物理含义也不同。
+  - Dunn 方法版本 5 保留原采样电位和选区端点，并检查组内中位数引入的局部拐点。每档扫速提供拟合与实测电荷、闭合差、原电流相对 RMS 残差和净电荷抵消比例。闭合差超过 ±3% 会提示。净值低于相应绝对积分的 10% 提示抵消，低于 0.1% 的分母留空。这些是显示和报告规则，两个百分比基准由用户选定。
+  - 文件 → 导出分析 CSV 可输出 `dunn_summary.csv`、`dunn_points.csv` 和 `dunn_inputs.csv`，以图索引关联逐扫速汇总、逐电位系数与分量、参与文件和循环。没有选区字段的历史图沿用共同窗口，缺少百分比基准时使用拟合净电荷。旧图重新计算后可能因积分网格和循环筛选更新而出现数值变化。
 
 电容–扫速拟合模式含义：一次函数在原始数据上拟合 `C = m·v + b`，轴类型只改变显示；坐标直线会按所选 X/Y 轴变换拟合，使最终图像中的线保持直线；幂律拟合 `C = a·vⁿ`。拟合方程的文本模板可使用 `{unit}` 引用当前电容显示单位，默认方程不强制增加系数单位。拟合图例按最终图形显示为 `Fitted Line` 或 `Fitted Curve`。各轴“自动”模式在数据全为正且范围跨 20 倍以上时选择对数轴，其余使用线性轴；纵轴自动模式还会检查误差棒下界。选项中会显示当前自动解析结果。幂律与对数-对数轴下的坐标直线数学上等价。
 
@@ -175,7 +178,9 @@ Nuitka 打包使用 `build.bat`，入口为 `start_gui.py`；构建环境、命�
 - GCD 循环：充电段后紧邻的放电段组成一个循环；开头单独放电段不计入。
 - 容量：默认 `Q = |I| × t` 只统计恒流活动段；开启“容量计入恒压保持段”后加上保持段电流积分。
 - 比容量：`Q_dis / m`（换算为 mAh/g）；面积容量：`Q_dis / A`（mAh/cm²）；库仑效率：`Q_dis / Q_chg × 100%`。
-- IR 降由电流切换两侧的局部电压趋势外推到同一时刻估算。保持段、采样不足或外推不可靠时留空。缺少某方向恒流设定时，相关容量和效率留空。循环完整性按电位限值或定时时长检查；部分或未确认循环保留编号与状态，并排除在完整循环统计之外。能量按活动段的 `∫V·I dt` 计算，可换算 Wh/kg 与 W/kg。
+- 导入 CHI CP 时按原文本数字精度逐行校验采样网格。网格通过后用于容量、效率、能量和电位–时间曲线。项目保留源时间列及恢复依据。网格校验确认已保存样点的时间，循环是否完整另行判断。
+- 电位切换模式按反转前后的样点限定切换时间。相邻充放电段共用同一切换时刻。稳定估计略超出区间时取最近端点，局部窗口结果不一致时取区间中点。缺少可验证的边界或边界区间重叠时按采样点计时。逐循环表和 CSV 标明计时方法，能定界时提供 CE 范围。能量按实测采样点积分。
+- IR 降由电流切换两侧的局部电压趋势外推到同一时刻估算。存在电位保持段、采样点不足或局部线性外推不可靠时，IR 降留空，弹窗和底部日志按原因汇总。缺少某方向恒流设定时，相关容量和效率留空。循环完整性按电位限值或定时时长检查，部分或未确认循环保留编号与状态，并排除在完整循环统计之外。能量按活动段的 `∫V·I dt` 计算，可换算 Wh/kg 与 W/kg。
 - 保持段记录不足或无法匹配时只显示警告，不强行补全；建议在图中结合原始电位-时间曲线核对。
 
 ### 6. 兼容性与清理说明
@@ -245,23 +250,26 @@ Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Bu
 ### Version and upgrade
 
 - Starting with v2.0.0, `main` contains the v2 workspace; v1 is archived in the `v1-archive` branch and tags `v1.1`, `v1.2.3`, `v1.3.0`.
-- Current release **v2.2.0** adds Dunn 100% basis selection (fitted vs measured) with side-by-side/stacked bars, live dataset-checkbox sync with the current plot, corrected b-value/Trasatti scan-rate checks and Trasatti total-charge extrapolation, CV per-cycle charge, CP/GCD completeness and IR drop, EIS fast geometry estimates, and warnings moved to a non-modal dialog plus the bottom red log. The 2.1.0 Liquid Glass UI, multi-file CP concatenation, LSV/I-T reference normalization and safe variable formatting remain.
+- Current release **v2.3.0** adds Dunn v5 with per-branch potential ROIs, fitted/measured 100% bases, closure/RMS/cancellation diagnostics and three CSV tables; CHI CP sampling-grid validation, potential-switch timing and CE ranges; plot-tab renaming and paper line-width compensation. The 2.2.0 Dunn dual-basis, live dataset-checkbox sync, b-value/Trasatti corrections, CP/GCD completeness and EIS geometry estimates remain.
 - Existing v1 clones without local changes can run `git pull --ff-only`; commit or back up local changes first, or simply re-clone.
 - The legacy GUI is removed; v1 `config.json` is migrated automatically.
 
 ### Main capabilities
 
 - Multi-file CV/EIS/CP import with shortened filenames and file details. Dataset checkboxes update the active plot, and each tab restores its own file and cycle selection. New imports are unchecked when several plots are open.
+- Plot tabs can be renamed in place: double-click a tab, press Enter or leave the field to commit, Esc to cancel; the context menu can rename or restore the automatic name. Names are stored per plot, separate from the in-figure title.
 - CV: capacitance vs scan rate, current at fixed potential, b-value, Trasatti charge separation, Dunn current decomposition, and contribution percentage bars vs scan rate.
+- Dunn v5 supports a per-branch potential ROI (drag or type endpoints), fitted/measured 100% bases, and reports fitted/measured charge, closure error, relative RMS residual and net-to-absolute charge ratios. It exports `dunn_summary.csv`, `dunn_points.csv` and `dunn_inputs.csv`; Dunn contribution plots use measured scan-rate categories on X.
 - Normalization by electrode area or active mass.
 - EIS: Rs/Rct/f_peak/Cdl/τ estimates, Nyquist/Bode plots, frequency filtering.
 - EIS fitting: `Rs-(Rct||CPE)`, `Rs-(Rct||C)`, `Rs-CPE`, `Rs-C`; automatic model recommendation, parameter errors, R², RMSE and residual plots.
-- CP/GCD: CHI `Chronopotentiometry` import, optional hold-current block, optional hold-plateau completion in potential-time curves, capacity/specific capacity vs cycle, Coulombic efficiency, IR drop, energy and power metrics.
+- CP/GCD: CHI `Chronopotentiometry` import, optional hold-current block, optional hold-plateau completion in potential-time curves, capacity/specific capacity vs cycle, Coulombic efficiency, IR drop, energy and power metrics. The CHI sampling grid is validated against the printed time values; capacity, CE and IR calculations can use the verified grid, and per-cycle results report the potential-switch timing method and CE range. IR drop is left blank with a reason when hold intervals, sampling or local linearity prevent a stable estimate.
 - Categorized quick-analysis menus in the toolbar and menu bar: CV, EIS and CP/GCD.
 - Plot presets: daily, IEEE single column, IEEE double column, presentation, thesis; IEEE/thesis use Arial. Non-default presets open a quick parameter dialog with apply vs save-to-config semantics, aspect ratio, per-axis fonts, top/right border ticks and display toggles.
 - Manual X/Y limits for every plot, stored per project and applied to screen previews and exports. Separate sections are shown for Bode/fit subplots and for the secondary Y axis in CP capacity plots; empty values mean auto, and log axes require positive limits. On Nyquist plots manual limits take precedence over equal aspect; automatic equal aspect is used only when the Z'/Z'' span ratio is within about 4:1.
 - Display units and tick scale: choose automatic or manual prefixes for EIS impedance, CV/LSV/I-T current, CV capacitance, Trasatti charge and CP capacity/capacitance. Existing LSV/I-T plots retain their original unit until changed. Compatible unit switches convert manual ranges; incompatible quantities or invalid conversions clear the affected range. Legacy ranges without unit metadata are initially interpreted in the unit displayed when the project is opened. Axis label overrides can use `{unit}`. Log axes support default, scientific or decimal ticks; unified X/Y tick intervals mean equal numerical intervals, including when the physical units differ.
 - Compact layout: the final layout runs only after limits, units and ticks are fixed, so long auto-range tick labels no longer leave a large left margin after switching to manual limits. Paper-mode legend rebuilding is idempotent and never stacks duplicate figure legends.
+- Paper-mode line-width compensation: auto/full/half/manual coefficients from ×0.10 to ×2.00 scale curves, spines, ticks, grids and guides for the insertion width; the preview shows the coefficient and the source/paper line widths.
 - Top/right spine ticks can be disabled independently while keeping the spines visible; hiding a spine also hides its ticks (major and minor).
 - Plot-canvas context menu: detect used colors (line colors plus marker fill/edge, text colors last), edit current-plot colors, canvas aspect ratio, element styles, or fit the image to the tab; copy the current plot as PNG or as an SVG vector image for Word/PowerPoint/Illustrator; contextual controls include bar width and opacity.
 - `.cvproj` projects with `Ctrl+S` quick save and `Ctrl+Shift+S` Save As, PNG/PDF/SVG/TIFF export, CSV summary export.
@@ -279,8 +287,8 @@ Python 3.11+ is required. Packaging uses `build.bat` (Nuitka); see [Build.md](Bu
 
 - CV integrates the measured overlap of the two branches. The mean branch charge is `Area / (2 × scan_rate)` per cycle. Trasatti fits `q` against `1/√v` for the outer charge and `1/q` against `√v` for reciprocal total charge. The measured low-rate ratio is labelled separately.
 - New b-value plots use the forward sweep by default. Existing projects can retain the average absolute current of both branches. b-value and Trasatti fits require at least two distinct valid rates.
-- Dunn fractions use signed component charge and can be referenced to fitted or measured net charge. Automatic layout stacks the fitted fractions and groups the measured fractions.
+- Dunn v5 uses signed component charge, a per-branch potential ROI within the common measured window, and fitted/measured net-charge bases. It reports closure error, relative current RMS residual and net-to-absolute charge ratios; older plots without ROI fields keep the common window and fitted basis but may change numerically after recalculation.
 - CP charge/discharge direction defaults to potential-rise = charge and is not configurable in the UI; negative-electrode half-cells require external sign handling.
 - EIS impedance supports area normalization only; mass normalization falls back to raw impedance with a warning.
-- CP uses the current setpoint for each direction. Missing current, unconfirmed cycle completeness and an unresolved current-switch voltage step can leave metrics blank in results and CSV.
+- CP validates the CHI time grid, uses potential-switch timing intervals when they can be bounded, and reports sampled/estimated/bounded methods plus CE ranges. Missing current, unconfirmed completeness and unstable switch extrapolation can leave metrics blank in results and CSV.
 - EIS reports geometric Rct/Cdl only for approximately ideal arcs with both sides covered. Fitted metrics identify the circuit and frequency range.

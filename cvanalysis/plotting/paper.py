@@ -6,6 +6,9 @@ import math
 import warnings
 
 from matplotlib.backends.backend_agg import RendererAgg
+from matplotlib.collections import Collection
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from cvanalysis.plotting.legend import legend_sources, remember_legend_sources
 
 
@@ -13,8 +16,79 @@ PAPER_LEGEND_PLACEMENTS = {"auto", "inside", "outside"}
 MAX_PAPER_LEGEND_COLUMNS = 8
 SMALL_FIGURE_THRESHOLD = 0.33
 SMALL_FIGURE_FONT_SCALE = 0.8
+PAPER_HALF_LINEWIDTH = 0.60
+PAPER_MIN_LINEWIDTH_COEFFICIENT = 0.10
+PAPER_MAX_LINEWIDTH_COEFFICIENT = 2.00
 PAPER_AXIS_LABEL_PAD_PT = 2.0
 PAPER_SINGLE_AXIS_LEFT_BOUNDARY = 0.04
+
+
+def paper_manual_linewidth_coefficient(layout):
+    try:
+        value = float(layout.get("linewidth_coefficient", PAPER_HALF_LINEWIDTH))
+    except (TypeError, ValueError, OverflowError):
+        return PAPER_HALF_LINEWIDTH
+    if not math.isfinite(value):
+        return PAPER_HALF_LINEWIDTH
+    return min(PAPER_MAX_LINEWIDTH_COEFFICIENT, max(PAPER_MIN_LINEWIDTH_COEFFICIENT, value))
+
+
+def paper_insertion_scale(layout, style):
+    return (
+        float(layout.get("text_width_mm", 160))
+        * float(layout.get("fraction", .5))
+        / (style.figure_size[0] * 25.4)
+    )
+
+
+def paper_linewidth_factor(layout, style):
+    if not layout.get("enabled") or not layout.get("compensate_linewidths", False):
+        return 1.0
+    mode = layout.get("linewidth_mode", "auto")
+    if mode == "manual":
+        coefficient = paper_manual_linewidth_coefficient(layout)
+    elif mode == "half":
+        coefficient = PAPER_HALF_LINEWIDTH
+    elif mode == "full":
+        coefficient = 1.0
+    else:
+        coefficient = 1.0 if float(layout.get("fraction", .5)) >= .5 else PAPER_HALF_LINEWIDTH
+    return coefficient / paper_insertion_scale(layout, style)
+
+
+def compensate_paper_linewidths(figure, layout, style):
+    """Scale rendered strokes for the selected linewidth at insertion size."""
+    factor = paper_linewidth_factor(layout, style)
+    if factor == 1.0:
+        return
+    tick_lines = set()
+    for ax in figure.axes:
+        ax.tick_params(axis="both", which="major", width=style.tick_width * factor)
+        ax.tick_params(axis="both", which="minor", width=max(.4, style.tick_width * .6) * factor)
+        for axis in (ax.xaxis, ax.yaxis):
+            for tick in (*axis.get_major_ticks(), *axis.get_minor_ticks()):
+                tick_lines.update((id(tick.tick1line), id(tick.tick2line)))
+    artists = figure.findobj()
+    seen = set()
+    for artist in artists:
+        if id(artist) in seen:
+            continue
+        seen.add(id(artist))
+        if isinstance(artist, Line2D):
+            if id(artist) not in tick_lines:
+                artist.set_linewidth(artist.get_linewidth() * factor)
+                artist.set_markeredgewidth(artist.get_markeredgewidth() * factor)
+        elif isinstance(artist, Collection):
+            artist.set_linewidths([width * factor for width in artist.get_linewidths()])
+        elif isinstance(artist, Patch):
+            artist.set_linewidth(artist.get_linewidth() * factor)
+    # Annotation arrow patches are not always returned by Figure.findobj().
+    for ax in figure.axes:
+        for text in ax.texts:
+            arrow = getattr(text, "arrow_patch", None)
+            if arrow is not None and id(arrow) not in seen:
+                arrow.set_linewidth(arrow.get_linewidth() * factor)
+                seen.add(id(arrow))
 
 
 def paper_overrides(layout, style):
@@ -25,8 +99,7 @@ def paper_overrides(layout, style):
     body = float(layout.get("body_pt", 10))
     if not all(math.isfinite(v) for v in (fraction, page_mm, body)) or not (0 < fraction <= 1 and 50 <= page_mm <= 400 and 5 <= body <= 30):
         raise ValueError("论文占比须在 0–1 之间，版心宽度须为 50–400 mm，正文字号须为 5–30 pt")
-    source_width_mm = style.figure_size[0] * 25.4
-    scale = page_mm * fraction / source_width_mm
+    scale = paper_insertion_scale(layout, style)
     size_scale = SMALL_FIGURE_FONT_SCALE if fraction < SMALL_FIGURE_THRESHOLD else 1.0
     # Source points × placement scale = final points in the paper.
     # Derive this from the unchanging canvas, never from an already-scaled font.

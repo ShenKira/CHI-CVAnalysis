@@ -24,6 +24,12 @@ except Exception:  # pragma: no cover - exercised only in minimal environments
 
 
 METHOD_VERSION = 2
+DUNN_METHOD_VERSION = 5
+DUNN_CLOSURE_WARNING = 0.03
+# Reporting limits for net/gross charge. These are independent of instrument
+# accuracy and of the fitted-versus-measured charge closure.
+DUNN_MIN_NET_RATIO = 0.001
+DUNN_LOW_NET_RATIO = 0.10
 try:
     _trapz = np.trapezoid
 except AttributeError:
@@ -110,6 +116,39 @@ class TrasattiResult:
     capacitive_fraction_total: float | None = None
 
 
+@dataclass(frozen=True)
+class DunnInput:
+    run_id: str
+    label: str
+    scan_rate: float | None
+    cycle_indices: tuple[int, ...]
+    partial_cycle_indices: tuple[int, ...]
+    excluded_cycle_indices: tuple[int, ...]
+    potential_window: tuple[float, float] | None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class DunnCoverage:
+    inputs: tuple[DunnInput, ...]
+    common_window: tuple[float, float] | None
+
+
+@dataclass(frozen=True)
+class DunnRateDiagnostic:
+    scan_rate: float
+    q_capacitive: float
+    q_diffusive: float
+    q_fitted: float
+    q_measured: float
+    q_residual: float
+    closure_error: float
+    relative_rmse: float
+    fitted_net_ratio: float
+    measured_net_ratio: float
+    status: str
+
+
 @dataclass
 class DunnResult:
     potential: np.ndarray
@@ -122,9 +161,12 @@ class DunnResult:
     normalization: str = "none"
     warnings: list[str] = field(default_factory=list)
     method: str = "dunn"
-    method_version: int = 4
+    method_version: int = DUNN_METHOD_VERSION
     measured_current: np.ndarray | None = None
     fraction_basis: str = "fitted"
+    diffusive_fraction: float = float("nan")
+    fit: _DunnFit | None = None
+    diagnostic: DunnRateDiagnostic | None = None
 
 
 @dataclass
@@ -136,9 +178,11 @@ class DunnScanRateResult:
     normalization: str = "none"
     warnings: list[str] = field(default_factory=list)
     method: str = "dunn-scan-rate"
-    method_version: int = 4
+    method_version: int = DUNN_METHOD_VERSION
     potential_window: tuple[float, float] | None = None
     fraction_basis: str = "fitted"
+    fit: _DunnFit | None = None
+    diagnostics: tuple[DunnRateDiagnostic, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -854,23 +898,136 @@ def trasatti_analysis(
     )
 
 
-def _representative_branch(
-    run: CVRun,
-    grid: np.ndarray,
+def _collect_dunn_inputs(runs, cycle_selection, branch):
+    if branch not in ("up", "down"):
+        raise AnalysisError("Dunn 分析需要选择正扫或反扫支路")
+    inputs: list[DunnInput] = []
+    usable = []
+    for run in runs:
+        try:
+            rate = float(run.metadata.scan_rate)
+        except (TypeError, ValueError, OverflowError):
+            rate = float("nan")
+        rate = rate if np.isfinite(rate) and rate > 0 else None
+        explicit = cycle_selection is not None and run.run_id in cycle_selection
+        selected = _cycles_for_run(run, cycle_selection)
+        included: list[int] = []
+        excluded: list[int] = []
+        partial: list[int] = []
+        branches: list[np.ndarray] = []
+        for position, cycle in enumerate(selected, 1):
+            index = getattr(cycle, "index", position)
+            incomplete = getattr(cycle, "is_partial", False)
+            if incomplete:
+                partial.append(index)
+            points = cycle.branch_up if branch == "up" else cycle.branch_down
+            if (rate is None or not cycle.valid or (incomplete and not explicit)
+                    or len(points) < 2 or not np.isfinite(points).all()
+                    or np.any(np.diff(points[:, 0]) <= 0)):
+                excluded.append(index)
+                continue
+            included.append(index)
+            branches.append(points)
+        window = None
+        if branches:
+            window = (max(float(p[0, 0]) for p in branches), min(float(p[-1, 0]) for p in branches))
+            usable.append((run, rate, branches))
+        reasons = []
+        if rate is None:
+            reasons.append("缺少有效扫速")
+        elif not selected:
+            reasons.append("未选循环")
+        if set(excluded) & set(partial):
+            reasons.append("已排除未完整扫描的循环")
+        if set(included) & set(partial):
+            reasons.append("包含手动选中的部分循环")
+        if set(excluded) - set(partial) and rate is not None:
+            reasons.append("已排除无效循环或支路")
+        inputs.append(DunnInput(
+            run.run_id, getattr(run, "display_name", run.run_id), rate,
+            tuple(included), tuple(partial), tuple(excluded), window, "，".join(reasons),
+        ))
+    windows = [row.potential_window for row in inputs if row.potential_window is not None]
+    common = None
+    if windows:
+        low = max(window[0] for window in windows)
+        high = min(window[1] for window in windows)
+        if low < high:
+            common = (low, high)
+    return DunnCoverage(tuple(inputs), common), usable
+
+
+def dunn_input_coverage(
+    runs: Iterable[CVRun],
+    cycle_selection: dict[str, list[int]] | None = None,
     branch: str = "up",
-    cycles: Iterable[CVCycle] | None = None,
-) -> np.ndarray:
-    values: list[np.ndarray] = []
-    for cycle in cycles if cycles is not None else run.cycles:
-        if not cycle.valid:
-            continue
-        points = cycle.branch_up if branch == "up" else cycle.branch_down
-        if points.shape[0] < 2:
-            continue
-        values.append(np.interp(grid, points[:, 0], points[:, 1]))
-    if not values:
-        return np.full_like(grid, np.nan, dtype=float)
-    return np.nanmedian(np.vstack(values), axis=0)
+) -> DunnCoverage:
+    """Inspect selected cycles and common support without fitting any current."""
+    coverage, _ = _collect_dunn_inputs(runs, cycle_selection, branch)
+    return coverage
+
+
+def _dunn_window(common, requested):
+    if common is None:
+        raise AnalysisError("所选文件和循环没有共同实测电位窗口")
+    if requested is None:
+        return common
+    if not isinstance(requested, (tuple, list, np.ndarray)):
+        raise AnalysisError("Dunn 选区需要填写两个电位边界")
+    try:
+        low, high = map(float, requested)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise AnalysisError("Dunn 选区需要填写两个电位边界") from exc
+    if not np.isfinite([low, high]).all() or low >= high:
+        raise AnalysisError("Dunn 选区需要两个有限且按从低到高排列的电位边界")
+    if low < common[0] or high > common[1]:
+        raise AnalysisError(f"Dunn 选区超出共同实测窗口 {common[0]:g}–{common[1]:g} V，请调整选区或数据")
+    return low, high
+
+
+def _branch_median(branches, grid):
+    if len(branches) == 1:
+        points = branches[0]
+        return np.interp(grid, points[:, 0], points[:, 1])
+    # Bound the working array even for files with many selected cycles.
+    chunk_size = max(1, 1_000_000 // len(branches))
+    result = np.empty_like(grid)
+    for offset in range(0, grid.size, chunk_size):
+        nodes = grid[offset : offset + chunk_size]
+        matrix = np.vstack([np.interp(nodes, p[:, 0], p[:, 1]) for p in branches])
+        result[offset : offset + nodes.size] = np.median(matrix, axis=0)
+    return result
+
+
+def _dunn_grid(usable, low: float, high: float, warnings: list[str]) -> np.ndarray:
+    # Outside the ROI we only need the adjacent points used by interpolation.
+    points = (branch[:, 0] for _, _, branches in usable for branch in branches)
+    grid = np.unique(np.concatenate([
+        [low, high], *(p[(p > low) & (p < high)] for p in points),
+    ]))
+    # The median of more than two piecewise-linear curves can have extra
+    # corners between acquisition knots, where their order changes.
+    nonlinear = [branches for _, _, branches in usable if len(branches) > 2]
+    if not nonlinear:
+        return grid
+    fractions = np.array([.25, .5, .75])
+    for _ in range(8):
+        probes = grid[:-1, None] + np.diff(grid)[:, None] * fractions
+        refine = np.zeros(grid.size - 1, dtype=bool)
+        for branches in nonlinear:
+            ends = _branch_median(branches, grid)
+            truth = _branch_median(branches, probes.ravel()).reshape(probes.shape)
+            linear = ends[:-1, None] * (1 - fractions) + ends[1:, None] * fractions
+            scale = max(float(np.max(np.abs(ends))), float(np.max(np.abs(truth))))
+            refine |= np.any(np.abs(truth - linear) > scale * 1e-5, axis=1)
+        if not refine.any():
+            return grid
+        expanded = np.unique(np.concatenate((grid, probes[refine].ravel())))
+        if expanded.size == grid.size:
+            return grid
+        grid = expanded
+    warnings.append("Dunn 循环中位数网格已达到细化上限，积分仍可能受局部交叉影响")
+    return grid
 
 
 @dataclass
@@ -883,6 +1040,10 @@ class _DunnFit:
     mean_r2: float
     normalization: str
     warnings: list[str]
+    common_window: tuple[float, float]
+    branch: str
+    inputs: tuple[DunnInput, ...]
+    opposing_fraction: float
 
 
 def _dunn_fit_data(
@@ -890,49 +1051,22 @@ def _dunn_fit_data(
     normalization: str,
     cycle_selection: dict[str, list[int]] | None,
     branch: str,
+    potential_window: tuple[float, float] | None = None,
 ) -> _DunnFit:
-    if branch not in ("up", "down"):
-        raise AnalysisError("Dunn 分析需要选择正扫或反扫支路")
-    runs = list(runs)
-    selected_cycles = {
-        run.run_id: [cycle for cycle in _cycles_for_run(run, cycle_selection) if cycle.valid]
-        for run in runs
-    }
-    usable = [
-        run
-        for run in runs
-        if selected_cycles[run.run_id]
-        and run.metadata.scan_rate
-        and np.isfinite(run.metadata.scan_rate)
-        and run.metadata.scan_rate > 0
-    ]
-    if len(usable) < 2:
-        raise AnalysisError("Dunn 分析至少需要两个不同扫速")
-    rates = np.asarray([run.metadata.scan_rate for run in usable], dtype=float)
+    coverage, selected = _collect_dunn_inputs(runs, cycle_selection, branch)
+    usable = [run for run, _, _ in selected]
+    rates = np.asarray([rate for _, rate, _ in selected], dtype=float)
     unique_rates, groups = np.unique(rates, return_inverse=True)
     if unique_rates.size < 2:
         raise AnalysisError("Dunn 分析需要至少两个不同扫速")
-
-    lows = []
-    highs = []
-    for run in usable:
-        for cycle in selected_cycles[run.run_id]:
-            points = cycle.branch_up if branch == "up" else cycle.branch_down
-            if points.shape[0] >= 2:
-                lows.append(float(points[0, 0]))
-                highs.append(float(points[-1, 0]))
-    if not lows:
-        raise AnalysisError("所选支路没有可用电位数据")
-    low = max(lows)
-    high = min(highs)
-    if high <= low:
-        raise AnalysisError("不同文件的电位窗口没有重叠，无法进行贡献分解")
-    grid = np.linspace(low, high, 200)
-
-    currents = np.vstack(
-        [_representative_branch(run, grid, branch, selected_cycles[run.run_id]) for run in usable]
-    )
-    warnings: list[str] = []
+    low, high = _dunn_window(coverage.common_window, potential_window)
+    common_low, common_high = coverage.common_window
+    warnings = [f"{row.label}：{row.reason}" for row in coverage.inputs if row.reason]
+    widest = max(float(p[-1, 0] - p[0, 0]) for _, _, branches in selected for p in branches)
+    if common_high - common_low < 0.95 * widest:
+        warnings.append(f"支路共同窗口缩小至 {common_low:g}–{common_high:g} V")
+    grid = _dunn_grid(selected, low, high, warnings)
+    currents = np.vstack([_branch_median(branches, grid) for _, _, branches in selected])
     if normalization == "area" and not all(run.params.has_area() for run in usable):
         warnings.append("部分数据缺少电极面积，贡献分解回退为原始电流")
         normalization = "none"
@@ -960,61 +1094,129 @@ def _dunn_fit_data(
     # Dunn's usual linearization is i/sqrt(v) = k1*sqrt(v) + k2.
     # Regress in that space so scan rates receive the same weighting as the
     # transformed method, rather than minimizing errors in untransformed i.
-    design = np.column_stack([sqrt_rates, np.ones_like(sqrt_rates)])
+    # Column scaling protects the rank calculation from the unit/magnitude
+    # of the scan rates while leaving the OLS objective unchanged.
+    design = np.column_stack([sqrt_rates / sqrt_rates[-1], np.ones_like(sqrt_rates)])
     transformed = currents / sqrt_rates[:, np.newaxis]
-    coefficients, *_ = np.linalg.lstsq(design, transformed, rcond=None)
-    k1 = coefficients[0, :]
+    coefficients, _, rank, singular_values = np.linalg.lstsq(design, transformed, rcond=None)
+    if rank < 2:
+        raise AnalysisError("不同扫速间距过小，无法独立确定 Dunn 两个分量")
+    if singular_values[0] / singular_values[-1] > 100:
+        warnings.append("扫速跨度较窄，Dunn 分量可能对电流误差敏感")
+    k1 = coefficients[0, :] / sqrt_rates[-1]
     k2 = coefficients[1, :]
 
     transformed_predictions = design @ coefficients
-    r2_values: list[float] = []
-    for column in range(currents.shape[1]):
-        measured = transformed[:, column]
-        predicted = transformed_predictions[:, column]
-        ss_res = float(np.sum((measured - predicted) ** 2))
-        ss_tot = float(np.sum((measured - np.mean(measured)) ** 2))
-        if ss_tot > 0:
-            r2_values.append(1.0 - ss_res / ss_tot)
-    mean_r2 = float(np.mean(r2_values)) if r2_values else float("nan")
+    ss_res = np.sum((transformed - transformed_predictions) ** 2, axis=0)
+    ss_tot = np.sum((transformed - np.mean(transformed, axis=0)) ** 2, axis=0)
+    floor = (8 * np.finfo(float).eps) ** 2 * np.sum(transformed ** 2, axis=0)
+    defined = ss_tot > floor
+    r2 = 1.0 - np.divide(ss_res, ss_tot, out=np.zeros_like(ss_res), where=defined)
+    # Voltage weighting keeps clusters of original/higher-resolution knots
+    # from dominating the reported mean.
+    mean_r2 = float("nan")
+    if defined.any():
+        mean_r2 = float(_trapz(np.where(defined, r2, 0.0), grid) / _trapz(defined.astype(float), grid))
     if len(rates) < 3:
         warnings.append("仅两个不同扫速，直线拟合没有残差自由度")
-    if high - low < 0.95 * max(h - l for l, h in zip(lows, highs)):
-        warnings.append(f"支路共同窗口缩小至 {low:g}–{high:g} V")
 
     # Ignore roundoff in a vanishing component (e.g. an ideal capacitor).
     cap = k1 * rates[-1]
     diff = k2 * sqrt_rates[-1]
     tolerance = 1e-12 * np.maximum(np.abs(cap), np.abs(diff))
     opposing = (np.sign(cap) != np.sign(diff)) & (np.minimum(np.abs(cap), np.abs(diff)) > tolerance)
-    if opposing.any():
-        warnings.append(f"{opposing.mean():.1%} 电位点的拟合分量异号，储能机理占比需谨慎解释")
-    return _DunnFit(grid, rates, currents, k1, k2, mean_r2, normalization, warnings)
+    opposing_fraction = float(_trapz(opposing.astype(float), grid) / (high - low))
+    if opposing_fraction:
+        warnings.append(f"约 {opposing_fraction:.1%} 的电位区间内拟合分量异号，储能机理占比需谨慎解释")
+    return _DunnFit(
+        grid, rates, currents, k1, k2, mean_r2, normalization, warnings,
+        coverage.common_window, branch, coverage.inputs, opposing_fraction,
+    )
 
 
-def _dunn_fractions(fit: _DunnFit, rates: np.ndarray, measured: np.ndarray | None, basis: str):
-    """The common sweep direction and 1/v cancel in each signed charge ratio."""
-    cap = rates * _trapz(fit.k1, fit.grid)
-    diff = np.sqrt(rates) * _trapz(fit.k2, fit.grid)
-    if basis == "fitted":
-        denominator = cap + diff
-        scale = (rates * _trapz(np.abs(fit.k1), fit.grid)
-                 + np.sqrt(rates) * _trapz(np.abs(fit.k2), fit.grid))
-        label = "拟合"
-    elif basis == "measured":
-        if measured is None:
-            return np.full_like(rates, np.nan), np.full_like(rates, np.nan)
-        curves = np.atleast_2d(measured)
-        denominator = _trapz(curves, fit.grid, axis=1)
-        scale = _trapz(np.abs(curves), fit.grid, axis=1)
-        label = "实测"
-    else:
+def _absolute_linear_area(values: np.ndarray, grid: np.ndarray) -> float:
+    """Integrate magnitudes, including zeros inside linear intervals."""
+    left, right = np.abs(values[:-1]), np.abs(values[1:])
+    crossing = (left > 0) & (right > 0) & (np.signbit(values[:-1]) != np.signbit(values[1:]))
+    area = float(_trapz(np.abs(values), grid))
+    return area - float(np.sum(
+        np.diff(grid)[crossing] * left[crossing] * right[crossing] / (left[crossing] + right[crossing])
+    ))
+
+
+def _squared_linear_area(values: np.ndarray, grid: np.ndarray) -> float:
+    left, right = values[:-1], values[1:]
+    return float(np.sum(np.diff(grid) * (left ** 2 + left * right + right ** 2) / 3.0))
+
+
+def _dunn_report(fit: _DunnFit, rates: np.ndarray, measured: np.ndarray | None, basis: str):
+    if basis not in ("fitted", "measured"):
         raise AnalysisError("Dunn 占比基准必须为拟合分量之和或实测净电荷")
-    resolved = np.abs(denominator) > np.sqrt(np.finfo(float).eps) * scale
-    if not resolved.all():
-        missing = ", ".join(f"{v:g}" for v in rates[~resolved])
-        fit.warnings.append(f"{missing} V/s {label}净电荷为零或接近抵消，占比未定义")
-    return (np.divide(cap, denominator, out=np.full_like(rates, np.nan), where=resolved),
-            np.divide(diff, denominator, out=np.full_like(rates, np.nan), where=resolved))
+    curves = None if measured is None else np.atleast_2d(measured)
+    grid = fit.grid
+    q_cap = float(_trapz(fit.k1, grid))
+    q_diff_at_one = float(_trapz(fit.k2, grid))
+    gross_cap = _absolute_linear_area(fit.k1, grid)
+    gross_diff_at_one = _absolute_linear_area(fit.k2, grid)
+    cap_fractions = np.full_like(rates, np.nan)
+    diff_fractions = np.full_like(rates, np.nan)
+    rows = []
+    undefined_rates, low_fitted, low_measured, nonclosing_rates = [], [], [], []
+    for index, rate in enumerate(rates):
+        sqrt_rate = np.sqrt(rate)
+        q_diff = q_diff_at_one / sqrt_rate
+        q_fit = q_cap + q_diff
+        gross_fit = gross_cap + gross_diff_at_one / sqrt_rate
+        fit_ratio = abs(q_fit) / gross_fit if gross_fit > 0 else 0.0
+        q_observed = q_residual = obs_ratio = closure = rmse = float("nan")
+        if fit_ratio < DUNN_LOW_NET_RATIO:
+            low_fitted.append(rate)
+        if curves is not None:
+            observed = curves[index]
+            q_observed = float(_trapz(observed, grid) / rate)
+            gross_observed = _absolute_linear_area(observed, grid) / rate
+            obs_ratio = abs(q_observed) / gross_observed if gross_observed > 0 else 0.0
+            q_residual = q_fit - q_observed
+            if obs_ratio >= DUNN_MIN_NET_RATIO:
+                closure = q_residual / q_observed
+            residual = fit.k1 * rate + fit.k2 * sqrt_rate - observed
+            observed_energy = _squared_linear_area(observed, grid)
+            if observed_energy > 0:
+                rmse = float(np.sqrt(_squared_linear_area(residual, grid) / observed_energy))
+            if obs_ratio < DUNN_LOW_NET_RATIO:
+                low_measured.append(rate)
+            if abs(closure) > DUNN_CLOSURE_WARNING:
+                nonclosing_rates.append(rate)
+        denom, net_ratio = (q_fit, fit_ratio) if basis == "fitted" else (q_observed, obs_ratio)
+        if np.isfinite(denom) and net_ratio >= DUNN_MIN_NET_RATIO:
+            cap_fractions[index] = q_cap / denom
+            diff_fractions[index] = q_diff / denom
+            status = "diagnostic" if (
+                fit.opposing_fraction or fit_ratio < DUNN_LOW_NET_RATIO
+                or obs_ratio < DUNN_LOW_NET_RATIO or abs(closure) > DUNN_CLOSURE_WARNING
+                or len(fit.rates) == 2
+            ) else "ok"
+            if curves is None:
+                status = "prediction"
+        else:
+            status = "undefined"
+            if np.isfinite(denom):
+                undefined_rates.append(rate)
+            elif curves is None:
+                status = "prediction"
+        rows.append(DunnRateDiagnostic(
+            float(rate), q_cap, float(q_diff), float(q_fit), q_observed, q_residual,
+            closure, rmse, float(fit_ratio), obs_ratio, status,
+        ))
+    for values, message in (
+        (undefined_rates, f"{'拟合' if basis == 'fitted' else '实测'}净电荷为零或低于绝对积分的 {DUNN_MIN_NET_RATIO:.1%}，占比未定义"),
+        (low_fitted, f"拟合净电荷低于分量绝对积分之和的 {DUNN_LOW_NET_RATIO:.0%}，存在抵消"),
+        (low_measured, f"实测净电荷低于绝对积分的 {DUNN_LOW_NET_RATIO:.0%}，存在抵消"),
+        (nonclosing_rates, f"拟合总电荷与实测净电荷的相对偏差超过 {DUNN_CLOSURE_WARNING:.0%}"),
+    ):
+        if values:
+            fit.warnings.append(f"{', '.join(f'{v:g}' for v in values)} V/s {message}")
+    return cap_fractions, diff_fractions, tuple(rows)
 
 
 def dunn_analysis(
@@ -1025,8 +1227,9 @@ def dunn_analysis(
     cycle_selection: dict[str, list[int]] | None = None,
     branch: str = "up",
     fraction_basis: str = "fitted",
+    potential_window: tuple[float, float] | None = None,
 ) -> DunnResult:
-    fit = _dunn_fit_data(runs, normalization, cycle_selection, branch)
+    fit = _dunn_fit_data(runs, normalization, cycle_selection, branch, potential_window)
     rates = fit.rates
     if selected_scan_rate is None:
         selected_scan_rate = float(rates[(len(rates) - 1) // 2])
@@ -1042,7 +1245,7 @@ def dunn_analysis(
         measured = fit.measured[index]
     else:
         fit.warnings.append("该扫速无实测曲线，仅显示模型预测")
-    fractions, _ = _dunn_fractions(fit, np.array([selected_scan_rate], dtype=float), measured, fraction_basis)
+    cap, diff, diagnostics = _dunn_report(fit, np.array([selected_scan_rate]), measured, fraction_basis)
     capacitive = fit.k1 * selected_scan_rate
     diffusive = fit.k2 * np.sqrt(selected_scan_rate)
     return DunnResult(
@@ -1052,11 +1255,14 @@ def dunn_analysis(
         capacitive_current=capacitive,
         diffusive_current=diffusive,
         scan_rate=selected_scan_rate,
-        capacitive_fraction=float(fractions[0]),
+        capacitive_fraction=float(cap[0]),
+        diffusive_fraction=float(diff[0]),
         fraction_basis=fraction_basis,
         mean_r2=fit.mean_r2,
         normalization=fit.normalization,
         warnings=fit.warnings,
+        fit=fit,
+        diagnostic=diagnostics[0],
     )
 
 
@@ -1067,10 +1273,11 @@ def dunn_fraction_vs_scan_rate(
     cycle_selection: dict[str, list[int]] | None = None,
     branch: str = "up",
     fraction_basis: str = "fitted",
+    potential_window: tuple[float, float] | None = None,
 ) -> DunnScanRateResult:
     """Return signed charge fractions relative to the fitted or measured sweep."""
-    fit = _dunn_fit_data(runs, normalization, cycle_selection, branch)
-    cap, diff = _dunn_fractions(fit, fit.rates, fit.measured, fraction_basis)
+    fit = _dunn_fit_data(runs, normalization, cycle_selection, branch, potential_window)
+    cap, diff, diagnostics = _dunn_report(fit, fit.rates, fit.measured, fraction_basis)
     return DunnScanRateResult(
         scan_rates=fit.rates,
         capacitive_fraction=cap,
@@ -1080,4 +1287,6 @@ def dunn_fraction_vs_scan_rate(
         mean_r2=fit.mean_r2,
         normalization=fit.normalization,
         warnings=fit.warnings,
+        fit=fit,
+        diagnostics=diagnostics,
     )

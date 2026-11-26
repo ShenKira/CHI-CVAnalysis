@@ -511,6 +511,15 @@ class ResultsPanel(QWidget):
                     f"{cycle.ir_drop_V:.3g} V" if self._finite(cycle.ir_drop_V) else "—"
                 )
                 child_remark = cycle.cycle_warning
+                if not child_remark:
+                    timing_label = {
+                        "estimated": "切换时刻估算",
+                        "bounded": "按切换时刻计时，含区间约束估算",
+                        "sampled": "按采样点计时",
+                    }.get(cycle.timing_method, "")
+                    child_remark = timing_label
+                    if self._finite(cycle.ce_lower_pct) and self._finite(cycle.ce_upper_pct):
+                        child_remark += f"。CE 可取范围 {cycle.ce_lower_pct:.2f}–{cycle.ce_upper_pct:.2f}%"
                 child_rows.append(
                     [
                         f"Cycle {cycle.index}",
@@ -523,7 +532,7 @@ class ResultsPanel(QWidget):
                         child_remark,
                     ]
                 )
-                if child_remark:
+                if cycle.cycle_warning:
                     cp_child_colors[(row_index, child_index, 7)] = theme_color("error")
             cp_children.append(child_rows)
 

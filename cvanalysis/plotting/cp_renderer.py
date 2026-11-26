@@ -63,7 +63,7 @@ def cp_automatic_unit(summaries, quantity: str, normalization: str, include_hold
                    run.params.mass_mg * 1e-3 if normalization == "mass" else 1.0)
         if not divisor or not np.isfinite(divisor) or divisor <= 0:
             continue
-        for cycle in summary.cycles:
+        for cycle in summary.complete_cycles:
             for segment, charge in ((cycle.charge, cycle.charge_capacity_with_holds_C if include_holds else cycle.charge_capacity_C),
                                     (cycle.discharge, cycle.discharge_capacity_with_holds_C if include_holds else cycle.discharge_capacity_C)):
                 if not np.isfinite(charge):
@@ -319,14 +319,24 @@ def draw_gcd_curve(
     handles: list[str] = []
     for index, run in enumerate(runs):
         summary = _summary(run)
+        cycles = summary.complete_cycles
+        if summary.segments and summary.segments[0].direction < 0:
+            warnings.append(f"{run.display_name}：开头放电段没有对应的充电段，已从 GCD 曲线中剔除")
+        _append_warnings(warnings, [f"{run.display_name}：{message}" for message in summary.warnings])
+        if not cycles:
+            continue
+        visible_segments = {
+            segment.index for cycle in cycles for segment in (cycle.charge, cycle.discharge)
+        }
         series = completed_cp_series(
             run,
             complete_holds=complete_holds,
             segments=summary.segments,
             holds=summary.holds,
-            warnings=summary.warnings,
+            visible_segments=visible_segments,
+            time_s=summary.analysis_time_s,
         )
-        _append_warnings(warnings, series.warnings)
+        _append_warnings(warnings, [f"{run.display_name}：{message}" for message in series.warnings])
         show_annotation = len(runs) == 1 and style.annotation and spec.annotations
         resolved = resolved_labels.get(run.run_id)
         label = _legend_label(
@@ -360,7 +370,7 @@ def draw_gcd_curve(
                     "annotation.cp_gcd.current",
                     current=_current_text(run.applied_current_A, _current_override(spec)),
                 ),
-                plot_text(spec, "annotation.cp_gcd.cycles", n=summary.cycle_count),
+                plot_text(spec, "annotation.cp_gcd.cycles", n=len(cycles)),
             ]
             if np.isfinite(summary.mean_specific_capacity_mAh_g):
                 lines.append(
@@ -390,7 +400,7 @@ def draw_gcd_curve(
                 lines.append(
                     plot_text(spec, "annotation.cp_gcd.ir", value=summary.mean_ir_drop_V)
                 )
-            if complete_holds and series.completed:
+            if np.any(series.hold_mask & np.isfinite(series.potential_V)):
                 lines.append(plot_text(spec, "annotation.cp_gcd.holds_completed"))
             _annotate(
                 ax,
@@ -402,6 +412,9 @@ def draw_gcd_curve(
                 va="top",
                 size=max(9.0, style.annotation_size * 0.85),
             )
+    if not ax.lines:
+        _empty_plot(figure)
+        return warnings + ["没有可绘制的完整 GCD 循环"]
     _labels(
         ax,
         style,
@@ -716,6 +729,13 @@ def draw_cp_capacity(
                 ordered.append(run)
                 seen.add(run.run_id)
         runs = ordered or runs
+    summaries = [(run, _summary(run)) for run in runs]
+    for run, summary in summaries:
+        _append_warnings(warnings, [f"{run.display_name}：{message}" for message in summary.warnings])
+    if not any(summary.complete_cycles for _, summary in summaries):
+        _empty_plot(figure)
+        return warnings
+
     normalization = spec.normalization
     if normalization in {"mass", "area"}:
         available = all(
@@ -726,12 +746,6 @@ def draw_cp_capacity(
             warnings.append("部分数据缺少面积/质量参数，已回退为总容量")
             normalization = "none"
 
-    summaries = [(run, _summary(run)) for run in runs]
-    for run, summary in summaries:
-        _append_warnings(warnings, [f"{run.display_name}：{message}" for message in summary.warnings])
-    if not any(summary.cycles for _, summary in summaries):
-        _empty_plot(figure)
-        return warnings + ["没有完整的 GCD 循环"]
     summary_by_id = {run.run_id: summary for run, summary in summaries}
 
     entries: list[CPConcatEntry] = []
@@ -758,18 +772,32 @@ def draw_cp_capacity(
                 )
                 _append_warnings(warnings, [message])
 
-    values_by_run = {}
-    if concat_enabled or percentage == "unified":
-        values_by_run = {
-            run.run_id: cp_cycle_values(
-                run,
-                summary,
-                quantity=quantity,
-                normalization=normalization,
-                include_holds=include_holds,
-            )
+    values_by_run = {
+        run.run_id: cp_cycle_values(
+            run,
+            summary,
+            quantity=quantity,
+            normalization=normalization,
+            include_holds=include_holds,
+        )
+        for run, summary in summaries
+    }
+    if percentage == "cycle":
+        try:
+            reference_cycle = int(options.get("capacity_percent_cycle", 1))
+        except (TypeError, ValueError, OverflowError):
+            reference_cycle = None
+        incomplete_references = [
+            run.display_name
             for run, summary in summaries
-        }
+            if values_by_run[run.run_id]
+            and any(cycle.index == reference_cycle and cycle.completeness != "complete"
+                    for cycle in summary.cycles)
+        ]
+        if incomplete_references:
+            names = "、".join(incomplete_references)
+            warnings.append(f"{names}：100% 参考 Cycle {reference_cycle} 不完整，已回退为实际容量/电容值")
+            percentage = "absolute"
 
     unified_reference = None
     if percentage == "unified":
@@ -867,86 +895,16 @@ def draw_cp_capacity(
             handles=handles,
             labels=labels,
         )
-    for index, (run, summary) in enumerate(() if concat_enabled else summaries):
-        if not summary.cycles:
+    for index, run in enumerate(() if concat_enabled else runs):
+        values = values_by_run[run.run_id]
+        if not values:
             continue
         color = colors[index % len(colors)]
-        cycles = summary.cycles
-        discharge: list[float] = []
-        charge: list[float] = []
-        if normalization == "mass":
-            unit = "mAh/g"
-            for cycle in cycles:
-                discharge.append(
-                    cycle.specific_capacity_with_holds_mAh_g
-                    if include_holds
-                    else cycle.specific_capacity_mAh_g
-                )
-                charge.append(
-                    (
-                        cycle.charge_capacity_with_holds_C
-                        if include_holds
-                        else cycle.charge_capacity_C
-                    )
-                    / (run.params.mass_mg * 1e-3)
-                    / 3.6
-                    if run.params.mass_mg
-                    else float("nan")
-                )
-        elif normalization == "area":
-            unit = "mAh/cm²"
-            for cycle in cycles:
-                discharge.append(
-                    cycle.areal_capacity_with_holds_mAh_cm2
-                    if include_holds
-                    else cycle.areal_capacity_mAh_cm2
-                )
-                charge.append(
-                    (
-                        cycle.charge_capacity_with_holds_C
-                        if include_holds
-                        else cycle.charge_capacity_C
-                    )
-                    / run.params.area_cm2
-                    / 3.6
-                    if run.params.area_cm2
-                    else float("nan")
-                )
-        else:
-            unit = "mAh"
-            for cycle in cycles:
-                discharge.append(
-                    (
-                        cycle.discharge_capacity_with_holds_C
-                        if include_holds
-                        else cycle.discharge_capacity_C
-                    )
-                    / 3.6
-                )
-                charge.append(
-                    (
-                        cycle.charge_capacity_with_holds_C
-                        if include_holds
-                        else cycle.charge_capacity_C
-                    )
-                    / 3.6
-                )
-        if quantity == "capacitance":
-            def capacitance(capacity, segment):
-                potential = np.asarray(segment.potential_V, dtype=float)
-                if potential.size < 2:
-                    return float("nan")
-                delta = abs(float(potential[-1] - potential[0]))
-                return capacity * 3.6 / delta if np.isfinite(delta) and delta > 0 else float("nan")
-            charge = [capacitance(value, cycle.charge) for value, cycle in zip(charge, cycles)]
-            discharge = [capacitance(value, cycle.discharge) for value, cycle in zip(discharge, cycles)]
-            unit = {"mass": "F/g", "area": "F/cm²"}.get(normalization, "F")
         unit = selected_unit
-        charge = [value * display_factor for value in charge]
-        discharge = [value * display_factor for value in discharge]
-        x = [cycle.index for cycle in cycles]
-        mean_values = [(a + b) / 2 if np.isfinite(a) and np.isfinite(b) else float("nan")
-                       for a, b in zip(charge, discharge)]
+        charge = [value.charge * display_factor for value in values]
+        discharge = [value.discharge * display_factor for value in values]
+        x = [value.index for value in values]
+        mean_values = [value.mean * display_factor for value in values]
         if percentage != "absolute":
             if percentage == "manual" and (invalid_unit or invalid_reference_unit):
                 continue
@@ -1037,12 +995,7 @@ def draw_cp_capacity(
                 handles.extend(line)
                 labels.append(mean_label)
         if ax2 is not None:
-            efficiencies = [
-                cycle.coulombic_efficiency_with_holds_pct
-                if include_holds
-                else cycle.coulombic_efficiency_pct
-                for cycle in cycles
-            ]
+            efficiencies = [value.efficiency_pct for value in values]
             if any(np.isfinite(value) for value in efficiencies):
                 efficiency_label = _capacity_legend_text(spec, "efficiency", **{**legend_context, "unit": "%"})
                 efficiency_color = efficiency_colors[index % len(efficiency_colors)]

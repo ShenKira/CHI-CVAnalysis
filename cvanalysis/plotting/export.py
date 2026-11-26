@@ -19,7 +19,7 @@ from cvanalysis.plotting.colors import apply_color_overrides, apply_rebuilt_lege
 from cvanalysis.plotting.legend import dataset_runs, effective_template, is_blank_legend_template
 from cvanalysis.plotting.spec import PlotSpec
 from cvanalysis.plotting.style import PlotStyle, finalize_figure
-from cvanalysis.plotting.paper import finish_paper, fit_standard_legends, paper_overrides
+from cvanalysis.plotting.paper import compensate_paper_linewidths, finish_paper, fit_standard_legends, paper_overrides
 from cvanalysis.plotting.texts import plot_text_context
 from cvanalysis.plotting.ticks import apply_log_tick_formats, apply_unified_ticks
 from cvanalysis.plotting.template_format import collect_template_warnings
@@ -127,6 +127,7 @@ def render_plot(
         layout_style = style.with_overrides({"legend": True})
     _finish_layout(figure, replace(spec, show_legend=False) if blank_legend else spec, layout_style)
     apply_rebuilt_legend_text_overrides(figure, color_overrides, role_color_overrides)
+    compensate_paper_linewidths(figure, spec.paper_layout, style)
     return list(dict.fromkeys(warnings))
 
 

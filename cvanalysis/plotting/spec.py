@@ -8,6 +8,37 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+DUNN_CATEGORY_INDEX_UNIT = "类别索引"
+DUNN_CATEGORY_INDEX_DIMENSION = "category_index"
+
+
+def _dunn_axis_limit_options(options: Any, *, legacy: bool) -> Any:
+    """Tag an unqualified Dunn X range with its saved coordinate convention."""
+    if not isinstance(options, dict):
+        return options
+    limits = options.get("axis_limits")
+    main = limits.get("main") if isinstance(limits, dict) else None
+    if not isinstance(main, dict) or not any(
+        main.get(key) not in (None, "") for key in ("x_min", "x_max")
+    ):
+        return options
+    units = options.get("axis_limit_units")
+    if units is not None and not isinstance(units, dict):
+        return options
+    main_units = (units or {}).get("main")
+    if main_units is not None and (not isinstance(main_units, dict) or "x" in main_units):
+        return options
+    x_unit = {
+        "label": DUNN_CATEGORY_INDEX_UNIT if legacy else "V/s",
+        "factor": 1.0,
+        "dimension": DUNN_CATEGORY_INDEX_DIMENSION if legacy else "scan_rate",
+    }
+    return {
+        **options,
+        "axis_limit_units": {**(units or {}), "main": {**(main_units or {}), "x": x_unit}},
+    }
+
+
 PLOT_KINDS = {
     "cv_overlay": "CV 叠加图",
     "cv_cap_scan": "电容-扫速",
@@ -51,6 +82,7 @@ class PlotSpec:
     analysis_options: dict[str, Any] = field(default_factory=dict)
     paper_layout: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
+    tab_name: str = ""
 
     @property
     def label(self) -> str:
@@ -81,9 +113,13 @@ class PlotSpec:
             analysis_options=deepcopy(self.analysis_options),
             paper_layout=dict(self.paper_layout),
             extra=dict(self.extra),
+            tab_name=self.tab_name,
         )
 
     def to_dict(self) -> dict[str, Any]:
+        options = dict(self.analysis_options)
+        if self.kind == "cv_contribution_vs_rate":
+            options = _dunn_axis_limit_options(options, legacy=False)
         return {
             **{key: value for key, value in self.extra.items() if key != "follow_dataset"},
             "kind": self.kind,
@@ -100,13 +136,14 @@ class PlotSpec:
             "show_axes": self.show_axes,
             "annotations": self.annotations,
             "title": self.title,
+            "tab_name": self.tab_name,
             "preset": self.preset,
             "overrides": dict(self.overrides),
             "color_by": self.color_by,
             "x_log": self.x_log,
             "renumber_cycles": self.renumber_cycles,
             "legend_templates": dict(self.legend_templates),
-            "analysis_options": dict(self.analysis_options),
+            "analysis_options": options,
             "paper_layout": dict(self.paper_layout),
         }
 
@@ -118,4 +155,18 @@ class PlotSpec:
         values = {key: value for key, value in data.items() if key in allowed}
         values["extra"] = {**values.get("extra", {}), **{key: value for key, value in data.items() if key not in allowed}}
         values["extra"].pop("follow_dataset", None)
+        if not isinstance(values.get("tab_name", ""), str):
+            values["tab_name"] = ""
+        if values.get("kind") == "cv_contribution_vs_rate" and "analysis_options" in values:
+            # Older projects stored the raw Matplotlib category indices.
+            values["analysis_options"] = _dunn_axis_limit_options(values["analysis_options"], legacy=True)
         return cls(**values)
+
+
+def dunn_potential_window(spec: PlotSpec) -> Any:
+    """Read the active branch's ROI; the analysis layer validates the value."""
+    ranges = spec.analysis_options.get("dunn_roi_by_branch")
+    if isinstance(ranges, dict):
+        branch = spec.analysis_options.get("dunn_branch", "up")
+        return ranges.get(branch) if isinstance(branch, str) else None
+    return ranges

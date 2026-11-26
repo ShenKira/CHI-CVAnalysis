@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from cvanalysis.domain.errors import ParseError
+from cvanalysis.domain.cp_time import cp_time_warning, prepare_cp_time
 from cvanalysis.domain.models import (
     CPMetadata,
     CPRun,
@@ -192,7 +193,7 @@ class ChiCPParser:
     """
 
     parser_id = "chi_cp"
-    parser_version = 1
+    parser_version = 2
 
     def detect(self, text: str) -> bool:
         return "Chronopotentiometry" in text or bool(_CP_HEADER_RE.search(text))
@@ -227,6 +228,7 @@ class ChiCPParser:
             metadata.init_pn = metadata.init_pn.strip()
 
         times: list[float] = []
+        time_tokens: list[str] = []
         potentials: list[float] = []
         hold_times: list[float] = []
         hold_currents: list[float] = []
@@ -261,6 +263,7 @@ class ChiCPParser:
                 hold_currents.append(second)
             elif mode == "main":
                 times.append(first)
+                time_tokens.append(fields[0])
                 potentials.append(second)
             else:
                 skipped += 1
@@ -275,7 +278,8 @@ class ChiCPParser:
             raise ParseError(f"CP 电位范围为 0: {path.name}")
 
         warnings: list[str] = []
-        if np.any(np.diff(time_array) < 0):
+        reordered = bool(np.any(np.diff(time_array) < 0))
+        if reordered:
             order = np.argsort(time_array, kind="stable")
             time_array = time_array[order]
             potential_array = potential_array[order]
@@ -315,6 +319,9 @@ class ChiCPParser:
             parser_id=self.parser_id,
             parser_version=self.parser_version,
         )
+        prepare_cp_time(run, tokens=time_tokens, damaged=bool(skipped or reordered))
+        if message := cp_time_warning(run):
+            warnings.append(message)
         return ParseResult(runs=[run], warnings=warnings, parser_id=self.parser_id, parser_version=self.parser_version)
 
 

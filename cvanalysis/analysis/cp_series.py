@@ -47,13 +47,13 @@ class CPConcatEntry:
     def included_cycles(self) -> list[CPCycle]:
         return [
             cycle
-            for cycle in self.summary.cycles
+            for cycle in self.summary.complete_cycles
             if self.start <= cycle.index <= self.end
         ]
 
     @property
     def included_count(self) -> int:
-        return sum(1 for cycle in self.summary.cycles if self.start <= cycle.index <= self.end)
+        return len(self.included_cycles)
 
 
 @dataclass(frozen=True)
@@ -130,9 +130,9 @@ def cp_cycle_values(
     normalization: str = "none",
     include_holds: bool = False,
 ) -> list[CPCycleValue]:
-    """Return per-cycle values in mAh / F base units for one run."""
+    """Return values for complete cycles in mAh / F base units for one run."""
     values: list[CPCycleValue] = []
-    for cycle in summary.cycles:
+    for cycle in summary.complete_cycles:
         charge = _cycle_branch_value(
             cycle,
             "charge",
@@ -301,6 +301,8 @@ def resolve_cp_unified_reference(
         )
     value = find_cp_cycle_value(values_by_run.get(wanted_run, ()), target)
     if value is None:
+        if any(cycle.index == target for cycle in entry.summary.cycles):
+            return None, f"统一 100% 参考 Cycle {target} 不完整"
         return None, f"统一 100% 参考 Cycle {target} 不存在"
     return (
         CPReferenceValue(

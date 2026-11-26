@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import matplotlib
 import numpy as np
+import pytest
 
 matplotlib.use("Agg")
 
@@ -271,6 +272,79 @@ def test_contribution_current_plot_axes(synthetic_cv_runs):
     vertices = ax.collections[0].get_paths()[0].vertices
     assert np.any(vertices[:, 1] == 0)
     assert np.isclose(vertices[:, 1].max(), np.max(ax.lines[2].get_ydata()))
+
+
+def test_dunn_selected_branch_uses_its_analysis_window_in_both_plots(synthetic_cv_runs):
+    from cvanalysis.domain.models import Dataset
+
+    dataset = Dataset(cv_runs=synthetic_cv_runs)
+    run_ids = [run.run_id for run in synthetic_cv_runs]
+    options = {
+        "dunn_branch": "down",
+        "dunn_roi_by_branch": {"up": [0.4, 0.7], "down": [0.2, 0.8]},
+    }
+    curve_spec = PlotSpec("cv_contribution", run_ids, analysis_options=options)
+    bar_spec = PlotSpec("cv_contribution_vs_rate", run_ids, analysis_options=options)
+    style = BUILTIN_PRESETS["daily"].with_overrides({"show_title": True})
+    figure = Figure()
+    render_plot(figure, dataset, curve_spec, style)
+    for line in figure.axes[0].lines:
+        assert line.get_xdata()[[0, -1]] == pytest.approx([0.2, 0.8])
+    result = render_to_new_figure(dataset, curve_spec, style)
+    np.testing.assert_array_equal(
+        result.axes[0].lines[0].get_xydata(), figure.axes[0].lines[0].get_xydata()
+    )
+    render_plot(figure, dataset, bar_spec, style)
+    assert figure.axes[0].get_title() == "Reverse sweep (0.2 to 0.8 V)"
+
+    options["dunn_roi_by_branch"]["down"] = [-10, 10]
+    for spec in (curve_spec, bar_spec):
+        warnings = render_plot(figure, dataset, spec, style)
+        assert warnings
+        assert not figure.axes[0].axison
+        assert not figure.axes[0].texts
+
+
+def test_dunn_categories_accept_rate_bounds_and_keep_legacy_index_limits(synthetic_cv_runs):
+    from cvanalysis.domain.models import Dataset
+    from cvanalysis.plotting.axis_limits import axis_display_units
+
+    for run, rate in zip(synthetic_cv_runs, (0.01, 0.05, 0.1)):
+        run.metadata.scan_rate = rate
+    dataset = Dataset(cv_runs=synthetic_cv_runs)
+    run_ids = [run.run_id for run in synthetic_cv_runs]
+    style = BUILTIN_PRESETS["daily"]
+    figure = Figure()
+    spec = PlotSpec(
+        "cv_contribution_vs_rate", run_ids,
+        analysis_options={
+            "axis_limits": {"main": {"x_min": 0.03, "x_max": 0.1}},
+            "unified_xy_ticks": True,
+        },
+    )
+    spec = PlotSpec.from_dict(spec.to_dict())
+    warnings = render_plot(figure, dataset, spec, style)
+    assert any("扫速标签" in warning for warning in warnings)
+    ax = figure.axes[0]
+    assert ax.get_xlim()[0] == pytest.approx(0.5)
+    assert ax.get_xlim()[1] > 2
+    assert axis_display_units(ax)["x"] == ("V/s", 1.0)
+    assert list(ax.get_xticks()) == [0, 1, 2]
+    assert [tick.get_text() for tick in ax.get_xticklabels()] == ["0.01", "0.05", "0.1"]
+
+    spec.analysis_options["axis_limits"]["main"].update(x_min=0.06, x_max=0.08)
+    warnings = render_plot(figure, dataset, spec, style)
+    assert any("没有实测扫速" in warning for warning in warnings)
+    assert figure.axes[0].get_xlim()[0] < 0
+    assert figure.axes[0].get_xlim()[1] > 2
+
+    legacy = PlotSpec.from_dict({
+        "kind": "cv_contribution_vs_rate", "run_ids": run_ids,
+        "analysis_options": {"axis_limits": {"main": {"x_min": 0.2, "x_max": 1.8}}},
+    })
+    render_plot(figure, dataset, PlotSpec.from_dict(legacy.to_dict()), style)
+    assert figure.axes[0].get_xlim() == pytest.approx([0.2, 1.8])
+    assert axis_display_units(figure.axes[0])["x"] == ("类别索引", 1.0)
 
 
 def test_multi_run_overlay_legend_is_per_run(synthetic_cv_runs):

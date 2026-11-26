@@ -124,6 +124,8 @@ def apply_unified_ticks(
     options = analysis_options or {}
     if not bool(options.get("unified_xy_ticks", False)):
         return []
+    if kind == "cv_contribution_vs_rate":
+        return ["等距扫速类别的 X 轴使用实测扫速标签，已忽略强制统一 X/Y 刻度"]
     warnings: list[str] = []
     for ax in _target_axes(figure, kind):
         if ax.get_xscale() != "linear" or ax.get_yscale() != "linear":

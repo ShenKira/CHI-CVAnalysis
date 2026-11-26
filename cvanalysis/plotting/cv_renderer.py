@@ -38,7 +38,7 @@ from cvanalysis.domain.units import (
     resolve_unit,
     unit_factor,
 )
-from cvanalysis.plotting.axis_limits import set_axis_display_units
+from cvanalysis.plotting.axis_limits import axis_limit_unit_values, set_axis_display_units
 from cvanalysis.plotting.colors import resolve_color_cycle
 from cvanalysis.plotting.legend import (
     cycle_legend_groups,
@@ -50,7 +50,12 @@ from cvanalysis.plotting.legend import (
     resolve_legend_labels,
     template_uses_cycle,
 )
-from cvanalysis.plotting.spec import PlotSpec
+from cvanalysis.plotting.spec import (
+    DUNN_CATEGORY_INDEX_DIMENSION,
+    DUNN_CATEGORY_INDEX_UNIT,
+    PlotSpec,
+    dunn_potential_window,
+)
 from cvanalysis.plotting.style import PlotStyle, finalize_figure, font_kwargs
 from cvanalysis.plotting.texts import axis_text, compact_text_enabled, plot_text, safe_format
 
@@ -999,6 +1004,7 @@ def draw_contribution(
             cycle_selection=spec.cycle_selection,
             branch=spec.analysis_options.get("dunn_branch", "up"),
             fraction_basis=spec.analysis_options.get("dunn_fraction_basis", "fitted"),
+            potential_window=dunn_potential_window(spec),
         )
     except AnalysisError as exc:
         _empty_plot(figure)
@@ -1044,7 +1050,8 @@ def draw_contribution(
             plot_text(spec, "annotation.cv_contribution.capacitive", pct=result.capacitive_fraction * 100,
                       basis=result.fraction_basis)
             if np.isfinite(result.capacitive_fraction) else "",
-            plot_text(spec, "annotation.cv_contribution.mean_r2", r2=result.mean_r2),
+            plot_text(spec, "annotation.cv_contribution.mean_r2", r2=result.mean_r2)
+            if np.isfinite(result.mean_r2) else "",
         ]
         _annotate(ax, style, "\n".join(line for line in lines if line))
     if style.legend and spec.show_legend:
@@ -1140,6 +1147,7 @@ def draw_contribution_vs_rate(
             cycle_selection=spec.cycle_selection,
             branch=spec.analysis_options.get("dunn_branch", "up"),
             fraction_basis=spec.analysis_options.get("dunn_fraction_basis", "fitted"),
+            potential_window=dunn_potential_window(spec),
         )
     except AnalysisError as exc:
         _empty_plot(figure)
@@ -1183,13 +1191,25 @@ def draw_contribution_vs_rate(
                 if np.isfinite(value) and abs(value) >= 0.5 else "" for value in values
             ], label_type="center", fontsize=max(6.0, style.annotation_size - 1))
     ax.set_xticks(positions)
-    ax.set_xticklabels([f"{rate:g}" for rate in rates])
+    labels = [f"{rate:g}" for rate in rates]
+    if len(set(labels)) != len(labels):
+        labels = [str(float(rate)) for rate in rates]
+    ax.set_xticklabels(labels)
     values = np.concatenate((capacitive + capacitive_base, diffusive))
     finite = values[np.isfinite(values)]
     low = min(0.0, finite.min(initial=0.0))
     high = max(100.0, finite.max(initial=100.0))
     ax.set_ylim(low if low < -1e-10 else 0.0, high if high > 100 + 1e-10 else 100.0)
-    set_axis_display_units(ax, y=("%", 1.0))
+    stored_x = axis_limit_unit_values(spec.analysis_options, "main").get("x", {})
+    if stored_x.get("dimension") == DUNN_CATEGORY_INDEX_DIMENSION:
+        set_axis_display_units(
+            ax, x=(DUNN_CATEGORY_INDEX_UNIT, 1.0), y=("%", 1.0),
+            dimensions={"x": DUNN_CATEGORY_INDEX_DIMENSION},
+        )
+    else:
+        # Positions are still evenly spaced; range input is in measured V/s.
+        ax._cv_scan_rate_categories = tuple(map(float, rates))
+        set_axis_display_units(ax, x=("V/s", 1.0), y=("%", 1.0))
     if len(rates) > 6:
         ax.tick_params(axis="x", labelrotation=45)
         for label in ax.get_xticklabels():
@@ -1208,7 +1228,8 @@ def draw_contribution_vs_rate(
     if style.annotation and spec.annotations:
         lines = [
             plot_text(spec, "annotation.cv_contribution_vs_rate.n", n=len(rates)),
-            plot_text(spec, "annotation.cv_contribution_vs_rate.mean_r2", r2=result.mean_r2),
+            plot_text(spec, "annotation.cv_contribution_vs_rate.mean_r2", r2=result.mean_r2)
+            if np.isfinite(result.mean_r2) else "",
         ]
         _annotate(ax, style, "\n".join(line for line in lines if line))
 

@@ -5,6 +5,6 @@ authors:
   given-names: "Kira"
   orcid: "https://orcid.org/0009-0009-8719-3872"
 title: "CHI-CVAnalysis"
-version: 2.2.0
-date-released: 2026-11-19
+version: 2.3.0
+date-released: 2026-11-27
 url: "https://github.com/ShenKira/CHI-CVAnalysis"

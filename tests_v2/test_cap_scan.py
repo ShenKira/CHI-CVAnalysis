@@ -140,6 +140,7 @@ def test_cap_scan_auto_scales_update_in_options_panel(tmp_path, synthetic_cv_run
     window._request_plot("cv_cap_scan")
     panel = window.options_panel
     tab = window.tabs.currentWidget()
+    assert not panel.paper_linewidths.isEnabled()
     auto_label = lambda control: control.itemText(control.findData("auto"))
     assert auto_label(panel.controls["x_axis_scale"]) == "自动（线性）"
     assert auto_label(panel.controls["y_axis_scale"]) == "自动（线性）"
@@ -188,7 +189,17 @@ def test_reusable_dialog_applies_to_current_plot_and_validates(
     )
     panel.controls["error_bars"].setChecked(False)
     panel.paper_enabled.setChecked(True)
+    assert panel.paper_linewidths.isEnabled()
+    panel.paper_linewidths.setChecked(True)
     panel.fraction.setText("0/25")
+    assert "×0.60" in panel.preview.text()
+    panel.linewidth_mode.setCurrentIndex(panel.linewidth_mode.findData("manual"))
+    assert not panel.linewidth_coefficient_row.isHidden()
+    panel.linewidth_slider.setValue(74)
+    assert panel.linewidth_coefficient.value() == pytest.approx(.74)
+    panel.linewidth_coefficient.setValue(.68)
+    assert panel.linewidth_slider.value() == 68
+    assert "×0.68" in panel.preview.text()
     panel.legend_placement.setCurrentIndex(
         panel.legend_placement.findData("outside")
     )
@@ -205,6 +216,14 @@ def test_reusable_dialog_applies_to_current_plot_and_validates(
     assert tab.spec.paper_layout["legend_placement"] == "outside"
     assert tab.spec.paper_layout["legend_outside_threshold"] == .4
     assert tab.spec.paper_layout["legend_columns"] == 2
+    assert tab.spec.paper_layout["compensate_linewidths"] is True
+    assert tab.spec.paper_layout["linewidth_mode"] == "manual"
+    assert tab.spec.paper_layout["linewidth_coefficient"] == pytest.approx(.68)
+    assert tab.style.line_width == tab.base_style.line_width
+    assert "曲线：源图" in panel.preview.text()
+    original = tab.figure.axes[0].lines[0].get_linewidth()
+    panel.apply()
+    assert tab.figure.axes[0].lines[0].get_linewidth() == pytest.approx(original)
     assert tab.style.figure_size == tab.base_style.figure_size
     assert not panel.isWindow()
     panel.fraction.setText("0")

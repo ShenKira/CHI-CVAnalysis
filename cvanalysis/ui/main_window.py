@@ -688,6 +688,9 @@ class MainWindow(QMainWindow):
         self.combo_registry.refresh()
 
     def _connect_signals(self) -> None:
+        from cvanalysis.ui.widgets.tab_rename import PlotTabRenamer
+
+        self._tab_renamer = PlotTabRenamer(self)
         self.tabs.tabCloseRequested.connect(self._close_tab)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.dataset_model.selection_changed.connect(self._on_dataset_visibility_changed)
@@ -1853,8 +1856,11 @@ class MainWindow(QMainWindow):
         if index >= 0:
             self.tabs.setTabText(index, self._plot_tab_title(tab.spec))
             self.tabs.setTabToolTip(index, self._plot_tab_tooltip(tab.spec))
+            self._tab_renamer._schedule_position()
 
     def _plot_tab_title(self, spec: PlotSpec) -> str:
+        if spec.tab_name:
+            return spec.tab_name
         runs = [self.dataset.find_run(run_id) for run_id in spec.run_ids]
         runs = [run for run in runs if run is not None]
         if len(runs) == 1:
@@ -1867,10 +1873,11 @@ class MainWindow(QMainWindow):
     def _plot_tab_tooltip(self, spec: PlotSpec) -> str:
         runs = [self.dataset.find_run(run_id) for run_id in spec.run_ids]
         names = [run.display_name for run in runs if run is not None]
+        heading = f"{spec.tab_name}\n{spec.label}" if spec.tab_name else spec.label
         if not names:
-            return spec.label
+            return heading
         visible = "；".join(names[:8])
-        return f"{spec.label}\n{visible}" + (" …" if len(names) > 8 else "")
+        return f"{heading}\n{visible}" + (" …" if len(names) > 8 else "")
 
     def _active_plot_tab(self) -> PlotTab | None:
         widget = self.tabs.currentWidget()
@@ -1921,6 +1928,7 @@ class MainWindow(QMainWindow):
 
     def _close_tab(self, index: int) -> None:
         widget = self.tabs.widget(index)
+        self._tab_renamer.cancel_for(widget)
         was_active = widget is not None and widget is self._active_plot_tab()
         self.tabs.removeTab(index)
         if was_active:
@@ -1941,6 +1949,7 @@ class MainWindow(QMainWindow):
             self._close_tab(index)
 
     def _close_all_tabs_silent(self) -> None:
+        self._tab_renamer.cancel_for()
         if self._plot_warning_box is not None:
             self._plot_warning_box.close()
         self._bind_options_panel(None)
@@ -2689,9 +2698,14 @@ class MainWindow(QMainWindow):
             if isinstance(self.tabs.widget(index), PlotTab)
         ]
         try:
-            written = export_analysis_csv(self.dataset, directory, fits=self.fits, plots=specs)
+            warnings: list[str] = []
+            written = export_analysis_csv(self.dataset, directory, fits=self.fits, plots=specs, warnings=warnings)
             self.statusBar().showMessage(f"已导出 {len(written)} 个 CSV 文件")
+            warnings = list(dict.fromkeys(warnings))
+            for message in warnings:
+                self.logger.warning("CSV 导出 · %s", message)
             QMessageBox.information(self, "导出完成", "\n".join(str(path) for path in written))
+            self._show_warning_popup("CSV 导出", warnings)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "导出失败", str(exc))
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from cvanalysis.domain.cp_time import prepare_cp_time
 from cvanalysis.domain.models import (
     CPMetadata,
     CPRun,
@@ -207,6 +208,8 @@ def load_project(path: str | Path) -> ProjectState:
                     np.asarray(value, dtype=float) if value is not None else None
                 )
             run = cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+            if isinstance(run, CPRun) and not run.time_grid_status:
+                prepare_cp_time(run)
             run._project_data_extra = {k: v for k, v in data.items() if k not in cls.__dataclass_fields__}
             dataset.add_runs([run])
         if run is None:

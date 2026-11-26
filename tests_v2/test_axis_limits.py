@@ -51,8 +51,10 @@ def test_manual_limits_apply_and_layout_is_stable_for_every_plot_kind(
     for axis_spec in plot_axis_specs(kind):
         entry = {}
         if axis_spec.editable_x:
-            entry["x_min"] = 0.2
-            entry["x_max"] = 20.0
+            if kind == "cv_contribution_vs_rate":
+                entry.update(x_min=0.015, x_max=0.03)
+            else:
+                entry.update(x_min=0.2, x_max=20.0)
         if axis_spec.editable_y:
             entry["y_min"] = 0.2
             entry["y_max"] = 20.0
@@ -83,7 +85,8 @@ def test_manual_limits_apply_and_layout_is_stable_for_every_plot_kind(
             continue
         axis = figure.axes[axis_spec.index]
         if axis_spec.editable_x:
-            assert axis.get_xlim() == pytest.approx((0.2, 20.0))
+            expected = (0.5, 1.5) if kind == "cv_contribution_vs_rate" else (0.2, 20.0)
+            assert axis.get_xlim() == pytest.approx(expected)
         if axis_spec.editable_y:
             assert axis.get_ylim() == pytest.approx((0.2, 20.0))
 

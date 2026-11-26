@@ -173,6 +173,180 @@ def test_cp_fallback_turn_detection_without_scipy():
     assert _find_turns_fallback(np.asarray([0.0, 1.0, 2.0, 2.0, 1.0, 0.0])) == [3]
 
 
+@pytest.mark.parametrize("missing_sample", [False, True])
+def test_cp_rounded_time_recovers_only_a_verified_sampling_grid(tmp_path, missing_sample):
+    import json
+
+    from cvanalysis.io.chi import ChiCPParser
+    from cvanalysis.plotting.export import render_plot
+    from cvanalysis.services.project_service import load_project, save_project
+
+    branch = np.linspace(0, 1, 61)
+    potential = np.r_[0.0, np.tile(np.r_[branch[1:], branch[-2::-1]], 180)]
+    grid = .005 * np.arange(potential.size)
+    tokens = [f"{value:.3e}" for value in grid]
+    if missing_sample:
+        del tokens[40]
+        potential = np.delete(potential, 40)
+    raw = np.array([float(token) for token in tokens])
+    header = (
+        "Chronopotentiometry\nHigh E Limit (V) = 1\nLow E Limit (V) = 0\n"
+        "Anodic Current (A) = 1e-6\nCathodic Current (A) = 1e-6\n"
+        "Current Switching Polarity = Potential\nData Storage Interval (s) = .005\n"
+        "Time/sec, Potential/V\n"
+    )
+    rows = "\n".join(f"{token}, {value}" for token, value in zip(tokens, potential))
+    parsed = ChiCPParser().parse(header + rows, tmp_path / "rounded.txt")
+    run = parsed.runs[0]
+    assert run.summary is None
+    assert np.any(np.diff(raw) == 0)
+
+    summary = analyze_cp_run(run)
+    np.testing.assert_array_equal(run.time, raw)
+    if missing_sample:
+        assert run.time_grid_status == "unverified"
+        np.testing.assert_array_equal(summary.analysis_time_s, raw)
+        assert any("无法验证固定采样网格" in warning for warning in summary.warnings)
+        return
+
+    assert run.time_grid_status == "verified_text"
+    assert any("逐行校验通过" in warning for warning in parsed.warnings)
+    path = save_project(tmp_path / "rounded.cvproj", Dataset(cp_runs=[run]))
+    restored = load_project(path).dataset.cp_runs[0]
+    assert restored.time_grid_status == "verified_text"
+    np.testing.assert_array_equal(restored.time, raw)
+    np.testing.assert_allclose(analyze_cp_run(restored).analysis_time_s, grid)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["runs"][0]["data"].pop("time_grid_status")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    legacy = load_project(path).dataset.cp_runs[0]
+    assert legacy.time_grid_status == "verified_legacy"
+    np.testing.assert_allclose(analyze_cp_run(legacy).analysis_time_s, grid)
+
+    np.testing.assert_allclose(summary.analysis_time_s, grid)
+    assert len(summary.complete_cycles) == 180
+    assert [cycle.charge_capacity_C for cycle in summary.cycles] == pytest.approx(
+        [3e-7] * 180, abs=1e-15
+    )
+    assert [cycle.coulombic_efficiency_pct for cycle in summary.cycles] == pytest.approx([100] * 180)
+    assert [cycle.ir_drop_V for cycle in summary.cycles] == pytest.approx([0] * 180, abs=1e-9)
+    figure = Figure()
+    spec = PlotSpec("cp_gcd", [run.run_id])
+    warnings = render_plot(figure, Dataset(cp_runs=[run]), spec, BUILTIN_PRESETS["daily"])
+    np.testing.assert_allclose(figure.axes[0].lines[0].get_xdata(), grid)
+    assert any("逐行校验通过" in warning for warning in warnings)
+
+
+@pytest.mark.parametrize("phase,perturb", [
+    (0, "none"), (.002, "mixed"), (0, "curved"), (0, "unstable"),
+])
+def test_cp_switch_timing_with_known_boundaries(phase, perturb):
+    from cvanalysis.domain.models import CPMetadata, CPRun
+    from cvanalysis.services.export_service import cp_cycles_frame
+
+    switches = np.array([.074, .365, .647, .939, 1.228, 1.521]) + phase
+    time = np.arange(0, 1.58, .01)
+    potential = 4.8 * (switches[0] - time)
+    for index, (start, end) in enumerate(zip(switches, [*switches[1:], 1.8])):
+        mask = (time >= start) & (time < end)
+        first, last = (.22, 2.) if index % 2 == 0 else (1.78, 0.)
+        potential[mask] = first + (last - first) * (time[mask] - start) / (end - start)
+    first_after = np.searchsorted(time, switches[2], side="right")
+    if perturb == "mixed":
+        potential[first_after] = potential[first_after - 1] + .001
+    if perturb == "curved":
+        potential[first_after - 6 : first_after] += .030
+    if perturb == "unstable":
+        potential[first_after - 7 : first_after] = [.360, .295, .230, .165, .125, .085, .045]
+
+    run = CPRun("switch-test", "test", time, potential, CPMetadata(
+        high_e=2, low_e=0, anodic_current_A=1e-6, cathodic_current_A=1.04e-6,
+        switch_polarity="Potential", sample_interval_s=.01,
+    ))
+    summary = analyze_cp_run(run)
+    cycle = summary.cycles[0]
+    charge, discharge = np.diff(switches[:3])
+    expected_ce = 104 * discharge / charge
+    assert cycle.completeness == "complete"
+    assert cycle.ce_lower_pct <= expected_ce <= cycle.ce_upper_pct
+    if perturb in {"curved", "unstable"}:
+        chosen_end = time[first_after] - (.005 if perturb == "unstable" else 0.0)
+        assert cycle.timing_method == "bounded"
+        assert cycle.charge_duration_s == pytest.approx(charge)
+        assert cycle.discharge_duration_s == pytest.approx(chosen_end - switches[1])
+        assert cycle.coulombic_efficiency_pct == pytest.approx(104 * (chosen_end - switches[1]) / charge)
+        assert 104 * (chosen_end - switches[1]) / charge != pytest.approx(cycle.sampled_ce_pct)
+        assert summary.cycles[1].charge_duration_s == pytest.approx(switches[3] - chosen_end)
+        assert any("含区间约束的切换时刻" in warning for warning in summary.warnings)
+    else:
+        assert cycle.timing_method == "estimated"
+        assert cycle.charge_duration_s == pytest.approx(charge)
+        assert cycle.discharge_duration_s == pytest.approx(discharge)
+        assert cycle.coulombic_efficiency_pct == pytest.approx(expected_ce)
+        assert cycle.coulombic_efficiency_pct > 100
+    assert cycle.charge_capacity_C == pytest.approx(cycle.charge_duration_s * 1e-6)
+    exported = cp_cycles_frame(Dataset(cp_runs=[run])).iloc[0]
+    assert exported["timing_method"] == cycle.timing_method
+    assert exported["ce_lower_pct"] == cycle.ce_lower_pct
+    assert exported["sampled_ce_pct"] == cycle.sampled_ce_pct
+
+
+def test_long_cp_record_skips_only_incomplete_cycles():
+    from cvanalysis.domain.models import CPMetadata, CPRun
+    from cvanalysis.plotting.export import render_plot
+
+    potential = list(np.linspace(.6, 0, 11))
+    incomplete = {2, 210}
+    for index in range(1, 211):
+        # Cycle 3 switches near the high cutoff between stored samples.
+        high = {2: .65, 3: .973}.get(index, 1.0)
+        low = .4 if index == 210 else 0
+        potential.extend(np.linspace(0, high, 41)[1:])
+        potential.extend(np.linspace(high, low, 41)[1:])
+    potential = np.asarray(potential)
+    run = CPRun("long-cp", "test", np.arange(potential.size, dtype=float), potential.copy(),
+                CPMetadata(high_e=1, low_e=0, anodic_current_A=.01, cathodic_current_A=.01,
+                           switch_polarity="Potential", segment=421))
+    summary = analyze_cp_run(run)
+    assert len(summary.segments) == 421
+    assert {cycle.index for cycle in summary.cycles if cycle.completeness == "partial"} == incomplete
+    expected = [index for index in range(1, 211) if index not in incomplete]
+    assert [cycle.index for cycle in summary.complete_cycles] == expected
+
+    dataset = Dataset(cp_runs=[run])
+    style = BUILTIN_PRESETS["daily"]
+    for concat in (False, True):
+        figure = Figure()
+        spec = PlotSpec("cp_capacity", [run.run_id], analysis_options={
+            "cp_concat_enabled": concat,
+            "cp_concat_cycle_mode": "cumulative",
+            "capacity_percent_mode": "cycle",
+            "capacity_percent_cycle": 2,
+        })
+        warnings = render_plot(figure, dataset, spec, style)
+        assert any("已回退为实际容量/电容值" in warning for warning in warnings)
+        assert any("Cycle 210：" in warning for warning in warnings)
+        for axis in figure.axes:
+            for line in axis.lines:
+                assert list(line.get_xdata()) == expected
+                assert np.isfinite(line.get_ydata()).all()
+        assert figure.axes[0].lines and not figure.axes[0].texts
+
+    figure = Figure()
+    warnings = render_plot(figure, dataset, PlotSpec("cp_gcd", [run.run_id]), style)
+    assert any("开头放电段" in warning for warning in warnings)
+    assert any("Cycle 2：" in warning for warning in warnings)
+    line = figure.axes[0].lines[0]
+    visible = np.zeros(potential.size, dtype=bool)
+    for cycle in summary.complete_cycles:
+        visible[cycle.charge.start_index : cycle.discharge.end_index + 1] = True
+    np.testing.assert_array_equal(line.get_xdata(), run.time)
+    np.testing.assert_array_equal(line.get_ydata()[visible], potential[visible])
+    assert np.isnan(line.get_ydata()[~visible]).all()
+    np.testing.assert_array_equal(run.potential, potential)
+
+
 def test_cp_hold_assignment_validates_polarity(synthetic_cp_run):
     from dataclasses import replace
 

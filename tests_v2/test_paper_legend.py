@@ -4,7 +4,7 @@ import pytest
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
-from cvanalysis.plotting.paper import finish_paper, paper_legend_settings, paper_overrides
+from cvanalysis.plotting.paper import finish_paper, paper_legend_settings, paper_linewidth_factor, paper_overrides
 from cvanalysis.plotting.presets import BUILTIN_PRESETS
 from cvanalysis.plotting.spec import PlotSpec
 
@@ -40,6 +40,95 @@ def test_paper_font_compensation_matrix():
     assert below["xlabel_size"] * below_scale == pytest.approx(7.2)
     assert at_boundary["title_size"] * boundary_scale == pytest.approx(10.0)
     assert at_boundary["xlabel_size"] * boundary_scale == pytest.approx(9.0)
+
+
+@pytest.mark.parametrize("fraction", [.5, .33, .25])
+def test_paper_line_widths_follow_insertion_size(synthetic_cv_runs, fraction):
+    from cvanalysis.domain.models import Dataset
+    from cvanalysis.plotting.export import render_plot, render_to_new_figure
+
+    base = BUILTIN_PRESETS["daily"].with_overrides({
+        "figure_size": (160 / 25.4, 3.2), "line_width": 1.6,
+        "axes_linewidth": .8, "tick_width": .6, "grid_width": .4, "grid": True,
+    })
+    spec = PlotSpec("cv_cap_scan", [r.run_id for r in synthetic_cv_runs],
+                    paper_layout={"enabled": True, "fraction": fraction, "text_width_mm": 160,
+                                  "compensate_linewidths": True, "linewidth_mode": "full"})
+    data = Dataset(cv_runs=synthetic_cv_runs)
+    figure = render_to_new_figure(data, spec, base)
+    ax = figure.axes[0]
+    assert ax.lines[0].get_linewidth() * fraction == pytest.approx(1.6)
+    assert ax.spines["left"].get_linewidth() * fraction == pytest.approx(.8)
+    assert ax.xaxis.get_major_ticks()[0].tick1line.get_markeredgewidth() * fraction == pytest.approx(.6)
+    assert ax.get_xgridlines()[0].get_linewidth() * fraction == pytest.approx(.4)
+    assert ax.lines[0].get_markersize() == pytest.approx(max(4., base.marker_size + 2))
+    widths = ax.collections[0].get_linewidths()
+    assert widths.size and widths[0] * fraction == pytest.approx(1.6)
+    # Render again on the same figure using the production pipeline.
+    styled = base.with_overrides(paper_overrides(spec.paper_layout, base))
+    render_plot(figure, data, spec, styled)
+    assert figure.axes[0].lines[0].get_linewidth() * fraction == pytest.approx(1.6)
+
+
+def test_paper_line_width_setting_is_saved_and_old_projects_default_off(synthetic_cv_runs, tmp_path):
+    from cvanalysis.domain.models import Dataset
+    from cvanalysis.plotting.export import render_to_new_figure
+    from cvanalysis.services.project_service import load_project, save_project
+
+    base = BUILTIN_PRESETS["daily"]
+    data = Dataset(cv_runs=synthetic_cv_runs)
+    spec = PlotSpec("cv_overlay", [r.run_id for r in synthetic_cv_runs],
+                    paper_layout={"enabled": True, "fraction": .25, "text_width_mm": 160})
+    old = render_to_new_figure(data, spec, base)
+    assert old.axes[0].lines[0].get_linewidth() == pytest.approx(base.line_width)
+    spec.paper_layout["compensate_linewidths"] = True
+    spec.paper_layout["linewidth_mode"] = "manual"
+    spec.paper_layout["linewidth_coefficient"] = .72
+    path = tmp_path / "paper.cvproj"
+    save_project(path, data, plots=[spec])
+    restored = load_project(path)
+    assert restored.plots[0].paper_layout["compensate_linewidths"] is True
+    assert restored.plots[0].paper_layout["linewidth_mode"] == "manual"
+    assert restored.plots[0].paper_layout["linewidth_coefficient"] == pytest.approx(.72)
+    assert spec.copy().paper_layout == spec.paper_layout
+
+
+def test_compensation_preserves_auxiliary_strokes_in_svg(synthetic_eis_run):
+    from cvanalysis.analysis.eis import analyze_eis
+    from cvanalysis.domain.models import Dataset
+    from cvanalysis.plotting.export import render_to_new_figure, render_svg_bytes
+
+    base = BUILTIN_PRESETS["daily"].with_overrides({"figure_size": (160 / 25.4, 3.2)})
+    data = Dataset(eis_runs=[synthetic_eis_run])
+    metrics = {synthetic_eis_run.run_id: analyze_eis(synthetic_eis_run)}
+    layout = {"enabled": True, "fraction": .25, "text_width_mm": 160,
+              "compensate_linewidths": True, "linewidth_mode": "half"}
+    spec = PlotSpec("eis_bode", [synthetic_eis_run.run_id], paper_layout=layout)
+    figure = render_to_new_figure(data, spec, base, metrics=metrics)
+    for ax in figure.axes:
+        assert ax.lines[0].get_linewidth() == pytest.approx(base.line_width * .60 / .25)
+        assert ax.lines[1].get_linewidth() == pytest.approx(.9 * .60 / .25)
+        assert ax.spines["left"].get_linewidth() == pytest.approx(base.axes_linewidth * .60 / .25)
+    data_bytes = render_svg_bytes(data, spec, base, metrics=metrics)
+    assert b"<svg" in data_bytes
+    assert b"stroke-width: 2.16" in data_bytes
+
+
+@pytest.mark.parametrize("fraction,settings,expected", [
+    (.5, {"linewidth_mode": "auto"}, 1.0),
+    (.499, {"linewidth_mode": "auto"}, .60),
+    (.33, {}, .60),
+    (.25, {"linewidth_mode": "full"}, 1.0),
+    (.5, {"linewidth_mode": "half"}, .60),
+    (.33, {"linewidth_mode": "manual", "linewidth_coefficient": .45}, .45),
+    (.33, {"linewidth_mode": "manual", "linewidth_coefficient": float("nan")}, .60),
+])
+def test_paper_linewidth_modes_at_insertion_size(fraction, settings, expected):
+    base = BUILTIN_PRESETS["daily"].with_overrides({"figure_size": (160 / 25.4, 3.2)})
+    layout = {"enabled": True, "fraction": fraction, "text_width_mm": 160,
+              "compensate_linewidths": True, **settings}
+    assert paper_linewidth_factor(layout, base) * fraction == pytest.approx(expected)
+    assert paper_linewidth_factor({**layout, "compensate_linewidths": False}, base) == 1.0
 
 
 def test_paper_export_dimensions_and_final_fonts(synthetic_cv_runs, tmp_path):

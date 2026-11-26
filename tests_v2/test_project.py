@@ -50,6 +50,41 @@ def test_project_round_trip(synthetic_cv_runs, tmp_path):
     assert state.plots[0].to_dict()["future_option"] == "preserved"
 
 
+def test_plot_tab_name_project_round_trip_and_copy(synthetic_cv_runs, tmp_path):
+    run = synthetic_cv_runs[0]
+    spec = PlotSpec(
+        "cv_overlay",
+        [run.run_id],
+        cycle_selection={run.run_id: [2]},
+        title="Scientific title",
+        tab_name="电极 A · 第 2 次",
+        analysis_options={"nested": {"values": [1, 2]}},
+    )
+    duplicate = spec.copy()
+    assert duplicate.tab_name == spec.tab_name
+    duplicate.tab_name = "另一个标签"
+    duplicate.analysis_options["nested"]["values"].append(3)
+    assert spec.tab_name == "电极 A · 第 2 次"
+    assert spec.analysis_options["nested"]["values"] == [1, 2]
+
+    project = tmp_path / "tab-names.cvproj"
+    save_project(project, Dataset(cv_runs=[run]), plots=[spec, duplicate])
+    state = load_project(project)
+    assert [plot.tab_name for plot in state.plots] == ["电极 A · 第 2 次", "另一个标签"]
+    assert all(plot.title == "Scientific title" for plot in state.plots)
+    loaded_run = state.dataset.cv_runs[0]
+    assert state.plots[0].cycle_selection == {loaded_run.run_id: [2]}
+    assert state.plots[0].run_ids == [loaded_run.run_id]
+
+    saved = json.loads(project.read_text(encoding="utf-8"))
+    saved["plots"][0].pop("tab_name")
+    saved["plots"][1]["tab_name"] = {"invalid": "name"}
+    project.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+    legacy = load_project(project)
+    assert [plot.tab_name for plot in legacy.plots] == ["", ""]
+    assert [plot.label for plot in legacy.plots] == [spec.label, spec.label]
+
+
 def test_project_embedded_preset_is_available_and_saved_without_modifying_global_presets(tmp_path, synthetic_cv_runs):
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication

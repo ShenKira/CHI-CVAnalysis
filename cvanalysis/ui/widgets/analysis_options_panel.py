@@ -1,11 +1,13 @@
 """Embedded bottom-right editor for the active plot."""
+from copy import deepcopy
 import math
+from weakref import WeakKeyDictionary
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QSignalBlocker, Signal
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget,
-    QWidget, QComboBox, QCheckBox, QDoubleSpinBox, QPushButton, QLabel,
+    QWidget, QComboBox, QCheckBox, QDialog, QDoubleSpinBox, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QGroupBox, QSizePolicy, QSpinBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QSlider)
 from cvanalysis.analysis.cp import CPRunSummary, analyze_cp_run
 from cvanalysis.analysis.cp_series import (
     cp_concat_entries,
@@ -14,6 +16,7 @@ from cvanalysis.analysis.cp_series import (
     normalize_cp_concat_config,
     resolve_cp_unified_reference,
 )
+from cvanalysis.analysis.cv import dunn_input_coverage
 from cvanalysis.domain.units import (
     CAPACITANCE,
     CURRENT,
@@ -38,11 +41,18 @@ from cvanalysis.plotting.axis_limits import (
 )
 from cvanalysis.plotting.legend import DEFAULT_CYCLE_LEGEND_LIMIT
 from cvanalysis.plotting.cp_renderer import cp_automatic_unit
-from cvanalysis.plotting.paper import paper_legend_settings, paper_overrides
+from cvanalysis.plotting.paper import (
+    PAPER_HALF_LINEWIDTH, PAPER_MAX_LINEWIDTH_COEFFICIENT, PAPER_MIN_LINEWIDTH_COEFFICIENT,
+    paper_insertion_scale, paper_legend_settings, paper_linewidth_factor,
+    paper_manual_linewidth_coefficient, paper_overrides,
+)
 from cvanalysis.plotting.template_format import TemplateError, format_template
 from cvanalysis.plotting.it_references import references_from_options
 from cvanalysis.ui.theme import apply_button_role, apply_theme_role
 from cvanalysis.ui.dialogs.dunn_basis import BASIS_LABELS, BASIS_NOTE, show_dunn_basis
+from cvanalysis.ui.dialogs.dunn_window_dialog import (
+    DunnWindowDialog, check_dunn_coverage, dunn_plot_runs, read_dunn_window,
+)
 from cvanalysis.ui.tokens import BASE_FONT_SIZE, UiTokens
 from cvanalysis.ui.widgets.formatted_text_preview import FormattedTextPreview
 
@@ -57,6 +67,8 @@ class AnalysisOptionsPanel(QWidget):
         self.setWindowTitle("当前图：分析与论文排版")
         self.tab = None
         self._reference_connected_tab = None
+        self._dunn_connected_tab = None
+        self._dunn_drafts = WeakKeyDictionary()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
@@ -177,6 +189,36 @@ class AnalysisOptionsPanel(QWidget):
         for count in range(1, 9):
             self.legend_columns.addItem(f"{count} 列", count)
         form.addRow("图例列数", self.legend_columns)
+        self.paper_linewidths = QCheckBox("启用线宽补偿")
+        self.paper_linewidths.setToolTip("按插入尺寸补偿曲线、边框、刻度和辅助线。样式面板保留基准线宽。")
+        form.addRow(self.paper_linewidths)
+        self.linewidth_mode = QComboBox()
+        for label, value in (("自动", "auto"), ("全宽", "full"), ("半宽", "half"), ("手动指定比例系数", "manual")):
+            self.linewidth_mode.addItem(label, value)
+        self.linewidth_mode.setToolTip(
+            f"自动在图片占比 ≥ 0.5 时使用全宽（×1.00），较小时使用半宽（×{PAPER_HALF_LINEWIDTH:.2f}）。"
+        )
+        form.addRow("线宽调整", self.linewidth_mode)
+        self.linewidth_slider = QSlider(Qt.Horizontal)
+        self.linewidth_slider.setRange(
+            round(PAPER_MIN_LINEWIDTH_COEFFICIENT * 100),
+            round(PAPER_MAX_LINEWIDTH_COEFFICIENT * 100),
+        )
+        self.linewidth_slider.setValue(round(PAPER_HALF_LINEWIDTH * 100))
+        self.linewidth_coefficient = self.spin(
+            PAPER_MIN_LINEWIDTH_COEFFICIENT, PAPER_MAX_LINEWIDTH_COEFFICIENT, PAPER_HALF_LINEWIDTH,
+        )
+        self.linewidth_coefficient.setDecimals(2)
+        self.linewidth_coefficient.setSingleStep(.01)
+        self.linewidth_coefficient.setPrefix("×")
+        coefficient_row = QWidget()
+        coefficient_layout = QHBoxLayout(coefficient_row)
+        coefficient_layout.setContentsMargins(0, 0, 0, 0)
+        coefficient_layout.addWidget(self.linewidth_slider, 1)
+        coefficient_layout.addWidget(self.linewidth_coefficient)
+        self.linewidth_coefficient_row = coefficient_row
+        self.paper_form = form
+        form.addRow("线宽修正系数", coefficient_row)
         self.preview = QLabel()
         self.preview.setWordWrap(True)
         self.preview.setMinimumHeight(80)
@@ -194,6 +236,15 @@ class AnalysisOptionsPanel(QWidget):
         for control in (self.fraction, self.page_width, self.body_size, self.legend_outside_threshold):
             (control.textChanged if isinstance(control, QLineEdit) else control.valueChanged).connect(self.update_preview)
         self.paper_enabled.toggled.connect(self.update_preview)
+        self.paper_enabled.toggled.connect(self._update_linewidth_controls)
+        self.paper_linewidths.toggled.connect(self._update_linewidth_controls)
+        self.paper_linewidths.toggled.connect(self.update_preview)
+        self.linewidth_mode.currentIndexChanged.connect(self._update_linewidth_controls)
+        self.linewidth_mode.currentIndexChanged.connect(self.update_preview)
+        self.linewidth_slider.valueChanged.connect(lambda value: self.linewidth_coefficient.setValue(value / 100))
+        self.linewidth_coefficient.valueChanged.connect(self._sync_linewidth_slider)
+        self.linewidth_coefficient.valueChanged.connect(self.update_preview)
+        self._update_linewidth_controls()
         self.legend_placement.currentIndexChanged.connect(self._update_legend_controls)
         self.legend_placement.currentIndexChanged.connect(self.update_preview)
         self.legend_columns.currentIndexChanged.connect(self.update_preview)
@@ -349,6 +400,15 @@ class AnalysisOptionsPanel(QWidget):
             except (RuntimeError, TypeError):
                 pass
             self._reference_connected_tab = None
+        if self._dunn_connected_tab is not None:
+            try:
+                self._dunn_connected_tab.rendered.disconnect(self._refresh_dunn_controls)
+            except (RuntimeError, TypeError):
+                pass
+            self._dunn_connected_tab = None
+        self._dunn_summary = None
+        self._dunn_rate_combo = None
+        self._dunn_rate_signature = None
         self.tab = tab
         self._cp_reference_needs_confirmation = False
         self._it_position_controls = {}
@@ -443,9 +503,11 @@ class AnalysisOptionsPanel(QWidget):
             branch = QComboBox()
             branch.addItem("正扫（电位递增）", "up")
             branch.addItem("反扫（电位递减）", "down")
-            branch.setCurrentIndex(max(0, branch.findData(spec.analysis_options.get("dunn_branch", "up"))))
+            _, selected_branch = self._dunn_window_options(tab)
+            branch.setCurrentIndex(max(0, branch.findData(selected_branch)))
             self.form.addRow("Dunn 扫描支路", branch)
             self.controls["dunn_branch"] = branch
+            branch.currentIndexChanged.connect(self._refresh_dunn_controls)
             basis = QComboBox()
             for key, label in BASIS_LABELS.items():
                 basis.addItem(label, key)
@@ -453,6 +515,19 @@ class AnalysisOptionsPanel(QWidget):
             basis.setToolTip(BASIS_NOTE)
             self.form.addRow("贡献率 100% 基准", basis)
             self.controls["dunn_fraction_basis"] = basis
+            basis.currentIndexChanged.connect(self._sync_dunn_preview_basis)
+            select_window = QPushButton("电位选区…")
+            select_window.setToolTip("在 CV 上选区，预览各扫速的拟合、残差和诊断结果。")
+            apply_button_role(select_window, "secondary")
+            select_window.clicked.connect(self._open_dunn_window)
+            self.form.addRow(select_window)
+            self._dunn_summary = QLabel()
+            self._dunn_summary.setWordWrap(True)
+            self._dunn_summary.setTextFormat(Qt.PlainText)
+            apply_theme_role(self._dunn_summary, "hint")
+            self.form.addRow(self._dunn_summary)
+            self._dunn_connected_tab = tab
+            tab.rendered.connect(self._refresh_dunn_controls)
         if spec.kind == "cv_contribution_vs_rate":
             layout = QComboBox()
             layout.addItem("随基准自动", "auto")
@@ -463,10 +538,15 @@ class AnalysisOptionsPanel(QWidget):
             self.form.addRow("柱状图布局", layout)
             self.controls["dunn_bar_layout"] = layout
         if spec.kind == "cv_contribution":
-            control = self.spin(.000001, 1000000, spec.selected_scan_rate or .01)
-            control.setSuffix(" V/s")
-            self.form.addRow("分解扫速", control)
-            self.controls["selected_scan_rate"] = control
+            self._dunn_rate_combo = QComboBox()
+            self._dunn_prediction = QLineEdit()
+            self._dunn_prediction.setPlaceholderText("例如 0.012345 或 1.5e-4")
+            self._dunn_prediction.setToolTip("模型预测扫速（V/s）。实测基准只在实测扫速给出占比。")
+            self.form.addRow("分解扫速", self._dunn_rate_combo)
+            self.form.addRow("预测扫速（V/s）", self._dunn_prediction)
+            self._dunn_rate_combo.currentIndexChanged.connect(self._sync_dunn_prediction)
+        self._refresh_dunn_controls()
+        self._sync_dunn_preview_basis()
         if spec.kind.startswith("eis_"):
             for label, key in (("最低频率（留空不限）", "frequency_low"), ("最高频率（留空不限）", "frequency_high")):
                 value = getattr(spec, key)
@@ -1320,6 +1400,9 @@ class AnalysisOptionsPanel(QWidget):
             self.controls["legend_cycle_limit"] = control
         data = spec.paper_layout
         self.paper_enabled.setChecked(data.get("enabled", False))
+        self.paper_linewidths.setChecked(data.get("compensate_linewidths", False))
+        self.linewidth_mode.setCurrentIndex(max(0, self.linewidth_mode.findData(data.get("linewidth_mode", "auto"))))
+        self.linewidth_coefficient.setValue(paper_manual_linewidth_coefficient(data))
         self.fraction.setText(str(data.get("fraction", .5)))
         self.page_width.setValue(data.get("text_width_mm", 160))
         self.body_size.setValue(data.get("body_pt", 10))
@@ -1345,6 +1428,120 @@ class AnalysisOptionsPanel(QWidget):
         self._refresh_unified_tick_controls(tab)
         self._rebuild_axis_limit_page(tab)
 
+    def _dunn_window_options(self, tab):
+        draft = self._dunn_drafts.get(tab)
+        if draft is not None:
+            return draft
+        options = tab.spec.analysis_options
+        windows = options.get("dunn_roi_by_branch")
+        return windows if isinstance(windows, dict) else {}, options.get("dunn_branch", "up")
+
+    def _refresh_dunn_controls(self, *_args):
+        if self.tab is None or self._dunn_summary is None:
+            return
+        branch = self.controls["dunn_branch"].currentData()
+        coverage = dunn_input_coverage(dunn_plot_runs(self.tab), self.tab.spec.cycle_selection, branch)
+        windows, _ = self._dunn_window_options(self.tab)
+        bounds = windows.get(branch)
+        common = coverage.common_window
+        if bounds is None:
+            label = (f"共同窗口 {common[0]:.7g}–{common[1]:.7g} V" if common is not None
+                     else "没有共同实测电位区间")
+        else:
+            try:
+                limits = read_dunn_window(*map(str, bounds))
+                check_dunn_coverage(limits, common)
+                label = f"手动选区 {limits[0]:.7g}–{limits[1]:.7g} V"
+            except (TypeError, ValueError):
+                label = "手动选区超出共同实测范围或输入无效，请在选区编辑器调整。"
+        if self.tab in self._dunn_drafts:
+            label += "（待应用）"
+        self._dunn_summary.setText(label)
+        rate_control = self._dunn_rate_combo
+        if rate_control is None:
+            return
+        rates = tuple(sorted({float(row.scan_rate) for row in coverage.inputs
+                              if row.cycle_indices and row.scan_rate is not None}))
+        if rates == self._dunn_rate_signature:
+            return
+        before = self.tab.spec.selected_scan_rate if self._dunn_rate_signature is None else rate_control.currentData()
+        self._dunn_rate_signature = rates
+        with QSignalBlocker(rate_control):
+            rate_control.clear()
+            rate_control.addItem("自动（居中实测扫速）", None)
+            for rate in rates:
+                rate_control.addItem(f"{rate:.16g} V/s", rate)
+            rate_control.addItem("自定义预测", "custom")
+            if before is None:
+                rate_control.setCurrentIndex(0)
+            elif before == "custom":
+                rate_control.setCurrentIndex(rate_control.count() - 1)
+            elif before in rates:
+                rate_control.setCurrentIndex(rates.index(before) + 1)
+            else:
+                self._dunn_prediction.setText(repr(float(before)))
+                rate_control.setCurrentIndex(rate_control.count() - 1)
+        self._sync_dunn_prediction()
+
+    def _sync_dunn_prediction(self):
+        if self._dunn_rate_combo is not None:
+            self.form.setRowVisible(self._dunn_prediction, self._dunn_rate_combo.currentData() == "custom")
+
+    def _sync_dunn_preview_basis(self):
+        control = self.controls.get("dunn_fraction_basis")
+        if control is not None and self.tab is not None:
+            for editor in self.tab.findChildren(DunnWindowDialog, options=Qt.FindDirectChildrenOnly):
+                if editor.isVisible():
+                    editor.set_basis(control.currentData())
+
+    def _dunn_scan_rate_value(self):
+        if self._dunn_rate_combo is None:
+            return None
+        choice = self._dunn_rate_combo.currentData()
+        if choice != "custom":
+            return choice
+        try:
+            rate = float(self._dunn_prediction.text())
+        except ValueError:
+            raise ValueError("预测扫速须填写有限正数（V/s）。") from None
+        if not math.isfinite(rate) or rate <= 0:
+            raise ValueError("预测扫速须填写有限正数（V/s）。")
+        return rate
+
+    def _open_dunn_window(self):
+        tab = self.tab
+        if tab is None:
+            return
+        for editor in tab.findChildren(DunnWindowDialog, options=Qt.FindDirectChildrenOnly):
+            if editor.isVisible():
+                editor.raise_()
+                editor.activateWindow()
+                return
+        windows, _ = self._dunn_window_options(tab)
+        try:
+            rate = self._dunn_scan_rate_value()
+        except ValueError:
+            rate = None
+        editor = DunnWindowDialog(
+            tab, self.controls["dunn_branch"].currentData(),
+            self.controls["dunn_fraction_basis"].currentData(), windows, preview_rate=rate,
+        )
+
+        def stage(result):
+            if result != QDialog.Accepted:
+                return
+            self._dunn_drafts[tab] = (editor.windows, editor.branch)
+            if self.tab is tab:
+                branch = self.controls["dunn_branch"]
+                branch.setCurrentIndex(branch.findData(editor.branch))
+                self._refresh_dunn_controls()
+
+        editor.finished.connect(stage)
+        registry = getattr(tab.window(), "combo_registry", None)
+        if registry is not None:
+            registry.watch(editor)
+        editor.show()
+
     def refresh_axis_scale_labels(self):
         """Show which scale Auto currently resolves to in the active rendering."""
         if self.tab is None or not self.tab.figure.axes:
@@ -1364,6 +1561,17 @@ class AnalysisOptionsPanel(QWidget):
 
     def _update_legend_controls(self, *args):
         self.legend_outside_threshold.setEnabled(self.legend_placement.currentData() == "auto")
+
+    def _update_linewidth_controls(self, *args):
+        paper_enabled = self.paper_enabled.isChecked()
+        self.paper_linewidths.setEnabled(paper_enabled)
+        enabled = paper_enabled and self.paper_linewidths.isChecked()
+        self.linewidth_mode.setEnabled(enabled)
+        self.paper_form.setRowVisible(self.linewidth_coefficient_row, enabled and self.linewidth_mode.currentData() == "manual")
+
+    def _sync_linewidth_slider(self, coefficient):
+        with QSignalBlocker(self.linewidth_slider):
+            self.linewidth_slider.setValue(round(coefficient * 100))
 
     @staticmethod
     def _unified_tick_target(tab):
@@ -1783,6 +1991,9 @@ class AnalysisOptionsPanel(QWidget):
         threshold = self.legend_outside_threshold.value()
         return dict(
             enabled=self.paper_enabled.isChecked(),
+            compensate_linewidths=self.paper_linewidths.isChecked(),
+            linewidth_mode=self.linewidth_mode.currentData() or "auto",
+            linewidth_coefficient=self.linewidth_coefficient.value(),
             fraction=float(text),
             text_width_mm=self.page_width.value(),
             body_pt=self.body_size.value(),
@@ -1798,18 +2009,29 @@ class AnalysisOptionsPanel(QWidget):
             data = self.paper_values()
             style = self.tab.base_style.with_overrides(self.tab.spec.overrides)
             values = paper_overrides({**data, "enabled": True}, style)
-            scale = data["text_width_mm"] * data["fraction"] / (style.figure_size[0] * 25.4)
+            scale = paper_insertion_scale(data, style)
             placement, threshold, columns = paper_legend_settings(data, fraction=data["fraction"])
             placement_label = "图外" if placement == "outside" else "图内"
             if data["legend_placement"] == "auto":
                 placement_label += f"（占比 {'<' if data['fraction'] < threshold else '≥'} {threshold:g}）"
             columns_label = "自动列数" if columns == "auto" else f"{columns} 列"
             small_font_notice = "\n占比小于 0.33 时，补偿字号自动再缩至 80%。" if data["fraction"] < .33 else ""
+            width_scale = paper_linewidth_factor(data, style)
+            width_mode = (
+                f"线宽系数 ×{width_scale * scale:.2f}。"
+                if data["enabled"] and data["compensate_linewidths"] else ""
+            )
+            line_notice = (
+                f"{width_mode}"
+                f"曲线：源图 {style.line_width * width_scale:.2f} → 论文 {style.line_width * width_scale * scale:.2f} pt；"
+                f"边框：源图 {style.axes_linewidth * width_scale:.2f} → 论文 {style.axes_linewidth * width_scale * scale:.2f} pt。\n"
+            )
             self.preview.setText(
                 f"PNG 默认 {round(style.figure_size[0]*style.save_dpi)} × {round(style.figure_size[1]*style.save_dpi)} px（导出时可改 DPI）；"
                 f"论文宽度 {data['text_width_mm'] * data['fraction']:.1f} mm，缩放 {scale:.1%}。\n"
                 f"轴标题：源图 {values['xlabel_size']:.2f} → 论文 {values['xlabel_size']*scale:.2f} pt；"
                 f"刻度/图例 {values['tick_size']*scale:.2f} pt，注释 {values['annotation_size']*scale:.2f} pt。\n"
+                f"{line_notice}"
                 f"图例：{placement_label}，{columns_label}。{small_font_notice}")
         except (ValueError, TypeError) as exc:
             self.preview.setText(str(exc))
@@ -1946,6 +2168,21 @@ class AnalysisOptionsPanel(QWidget):
                     changes[key] = value
                 else:
                     changes[key] = control.value()
+            if "dunn_branch" in analysis:
+                windows, _ = self._dunn_window_options(self.tab)
+                bounds = windows.get(analysis["dunn_branch"])
+                if bounds is not None:
+                    if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+                        raise ValueError("Dunn 手动选区格式无效，请在选区编辑器调整。")
+                    window = read_dunn_window(*map(str, bounds))
+                    coverage = dunn_input_coverage(
+                        dunn_plot_runs(self.tab), self.tab.spec.cycle_selection, analysis["dunn_branch"]
+                    )
+                    check_dunn_coverage(window, coverage.common_window)
+                if self.tab in self._dunn_drafts:
+                    analysis["dunn_roi_by_branch"] = deepcopy(windows)
+                if self._dunn_rate_combo is not None:
+                    changes["selected_scan_rate"] = self._dunn_scan_rate_value()
             if self.tab.spec.kind == "cp_capacity":
                 concat_runs = [
                     run
@@ -2176,6 +2413,7 @@ class AnalysisOptionsPanel(QWidget):
             setattr(self.tab.spec, key, value)
         old_basis = self.tab.spec.analysis_options.get("dunn_fraction_basis", "fitted")
         self.tab.spec.analysis_options.update(analysis)
+        self._dunn_drafts.pop(self.tab, None)
         log_formats = {
             side: combo.currentData()
             for side, combo in self.log_tick_controls.items()

@@ -212,7 +212,7 @@ def test_cp_children_and_eis_has_no_children(synthetic_cp_run, synthetic_eis_run
     )
     assert model.data(model.index(0, 5, parent)) == "—"
     assert model.data(model.index(0, 6, parent)) == ""
-    assert model.data(model.index(0, 7, parent)) == ""
+    assert model.data(model.index(0, 7, parent)) == "按采样点计时"
 
     panel.update_dataset(Dataset(eis_runs=[synthetic_eis_run]))
     assert panel.eis_model.rowCount() == 1

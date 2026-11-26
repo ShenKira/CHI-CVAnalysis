@@ -19,6 +19,7 @@ affected side. Legacy ranges without metadata start in the displayed unit.
 from __future__ import annotations
 
 import math
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from typing import Any
 
@@ -370,6 +371,24 @@ def _apply_side(
     if high_invalid:
         warnings.append(f"{axis_label}：{axis_name} 最大值无效，已忽略")
     if low is None and high is None:
+        return
+
+    categories = getattr(ax, "_cv_scan_rate_categories", ()) if side == "x" else ()
+    if categories:
+        if low is not None and high is not None and low >= high:
+            warnings.append(f"{axis_label}：X 轴范围无效（最小值必须小于最大值），已忽略")
+            return
+        first = bisect_left(categories, low) if low is not None else 0
+        last = bisect_right(categories, high) if high is not None else len(categories)
+        if first >= last:
+            warnings.append(f"{axis_label}：X 轴范围内没有实测扫速，已忽略")
+            return
+        current_low, current_high = ax.get_xlim()
+        # Start/end between full bar groups instead of clipping any bar.
+        ax.set_xlim(
+            first - .5 if first > 0 else current_low,
+            last - .5 if last < len(categories) else current_high,
+        )
         return
 
     scale = ax.get_xscale() if side == "x" else ax.get_yscale()

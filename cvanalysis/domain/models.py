@@ -254,6 +254,7 @@ class CPRun:
     parser_id: str = "chi_cp"
     parser_version: int = 1
     summary: Any = field(default=None, repr=False, compare=False)
+    time_grid_status: str = ""
 
     @property
     def display_name(self) -> str:

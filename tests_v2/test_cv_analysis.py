@@ -322,15 +322,15 @@ def test_dunn_contributions_use_the_standard_transformed_regression():
     assert fitted_basis.diffusive_fraction + fitted_basis.capacitive_fraction == pytest.approx(np.ones(3))
     single_rate = dunn_analysis(runs, selected_scan_rate=float(rates[1]), fraction_basis="measured")
     assert single_rate.capacitive_fraction == pytest.approx(result.capacitive_fraction[1])
-    grid = np.linspace(float(potential[0]), float(potential[-1]), 200)
-    sampled_currents = np.vstack([np.interp(grid, potential, row) for row in currents])
-    coefficient_grid = np.vstack([np.interp(grid, potential, row) for row in coefficients])
-    transformed_prediction = design @ coefficient_grid
-    transformed = sampled_currents / np.sqrt(rates)[:, None]
+    transformed_prediction = design @ coefficients
+    transformed = currents / np.sqrt(rates)[:, None]
     ss_res = np.sum((transformed - transformed_prediction) ** 2, axis=0)
     ss_tot = np.sum((transformed - transformed.mean(axis=0)) ** 2, axis=0)
-    assert result.mean_r2 == pytest.approx(np.mean(1.0 - ss_res / ss_tot))
-    assert single_rate.measured_current == pytest.approx(sampled_currents[1])
+    assert result.mean_r2 == pytest.approx(np.trapezoid(1.0 - ss_res / ss_tot, potential))
+    assert single_rate.measured_current == pytest.approx(currents[1])
+    assert single_rate.diagnostic.closure_error == pytest.approx(
+        (cap_area[1] + diff_area[1]) / measured_area[1] - 1.0
+    )
 
 
 def test_dunn_reverse_sweep_replicates_and_unmeasured_rate():
@@ -372,6 +372,82 @@ def test_dunn_fitted_charge_can_cancel_with_nonzero_measured_charge():
     assert measured.capacitive_fraction == pytest.approx(-.2 / observed[1])
     assert measured.capacitive_current == pytest.approx(fitted.capacitive_current)
     assert measured.diffusive_current == pytest.approx(fitted.diffusive_current)
+
+
+def test_dunn_native_knots_preserve_narrow_peak_and_interpolate_roi():
+    potential = np.array([0., .499, .5, .501, 1.])
+    k1 = np.array([.1, .1, 1000.1, .1, .1]) * 1e-6
+    rates = [.01, .04, .09]
+    runs = [
+        SimpleNamespace(
+            run_id=str(index),
+            metadata=SimpleNamespace(scan_rate=rate),
+            cycles=[SimpleNamespace(
+                valid=True, branch_up=np.column_stack((potential, rate * k1 + np.sqrt(rate) * 1e-6))
+            )],
+        )
+        for index, rate in enumerate(rates)
+    ]
+    full = dunn_fraction_vs_scan_rate(runs)
+    assert full.capacitive_fraction[1] == pytest.approx(.22 / 1.22)
+    assert full.fit.grid == pytest.approx(potential)
+    clipped = dunn_analysis(runs, selected_scan_rate=.04, potential_window=(.4995, .5005))
+    assert clipped.potential == pytest.approx([.4995, .5, .5005])
+    assert clipped.diagnostic.q_capacitive == pytest.approx(750.1e-9, abs=1e-13)
+    assert clipped.diagnostic.q_measured == pytest.approx(clipped.diagnostic.q_fitted)
+    assert clipped.diagnostic.relative_rmse < 1e-10
+    with pytest.raises(AnalysisError, match="超出共同实测窗口"):
+        dunn_analysis(runs, potential_window=(-.001, .5))
+
+
+def test_dunn_cycle_median_adds_crossings_between_native_knots():
+    potential = np.array([0., 1.])
+    runs = [
+        SimpleNamespace(
+            run_id=str(index),
+            metadata=SimpleNamespace(scan_rate=rate),
+            cycles=[
+                SimpleNamespace(valid=True, branch_up=np.column_stack((potential, rate * k + 2 * np.sqrt(rate))))
+                for k in (potential, .4 - potential, np.ones_like(potential))
+            ],
+        )
+        for index, rate in enumerate([.01, .04, .09])
+    ]
+    fit = dunn_fraction_vs_scan_rate(runs)
+    assert any(abs(fit.fit.grid - .2) < 1e-4)
+    assert fit.diagnostics[1].q_capacitive == pytest.approx(.54, abs=1e-5)
+
+
+def test_dunn_partial_cycle_coverage_and_experimental_scale_cancellation():
+    from cvanalysis.analysis.cv import dunn_input_coverage
+
+    potential = np.linspace(0., 1., 11)
+    rates = [.25, 1., 4.]
+    a = potential - .5
+    runs = [
+        SimpleNamespace(
+            run_id=str(index),
+            metadata=SimpleNamespace(scan_rate=rate),
+            cycles=[SimpleNamespace(
+                index=1, valid=True, is_partial=False,
+                branch_up=np.column_stack((potential, 1.0001 * a * (1 + a) * rate + a * (1 - a) * np.sqrt(rate))),
+            )],
+        )
+        for index, rate in enumerate(rates)
+    ]
+    runs[0].cycles.append(SimpleNamespace(
+        index=2, valid=True, is_partial=True, branch_up=runs[0].cycles[0].branch_up[5:]
+    ))
+    coverage = dunn_input_coverage(runs)
+    assert coverage.common_window == (0., 1.)
+    assert coverage.inputs[0].partial_cycle_indices == (2,)
+    assert coverage.inputs[0].excluded_cycle_indices == (2,)
+    assert dunn_input_coverage(runs, {"0": [2]}).common_window == (.5, 1.)
+    fit = dunn_analysis(runs, selected_scan_rate=1.)
+    assert np.isnan(fit.capacitive_fraction)
+    assert fit.diagnostic.status == "undefined"
+    assert 0 < fit.diagnostic.fitted_net_ratio < .001
+    assert any("占比未定义" in warning for warning in fit.warnings)
 
 
 def test_trimmed_statistics_share_sample_and_recompute_clears_flags(synthetic_cv_runs):

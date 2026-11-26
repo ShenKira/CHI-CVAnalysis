@@ -1,6 +1,6 @@
 # Windows 构建与发布
 
-当前发布版本：**2.2.0**（2026-11-19）。构建结果和验收记录见下文；历史版本的二进制与校验信息以 GitHub Release 为准。
+当前发布版本：**2.3.0**（2026-11-27）。构建结果和验收记录见下文；历史版本的二进制与校验信息以 GitHub Release 为准。
 
 当前工作区约定：仅在用户明确要求时启动 Nuitka 打包。源码测试和交接文档更新使用现有 Python 环境。本地验证构建的编号与公开发布标签分开记录。
 
@@ -14,21 +14,37 @@
 ```powershell
 # 可指定另一套已安装依赖和 Nuitka 的 Python
 $env:CVANALYSIS_PYTHON = 'C:\path\to\env\python.exe'
-cmd /c build.bat 2.2.0 all
+cmd /c build.bat 2.3.0 all
 # 也可分别使用 standalone / onefile
 ```
 
-`build.bat` 默认版本为 2.2.0，先构建 StandAlone，再构建 OneFile。它自动把所选 Python 环境的 `Library/bin` 等目录加入 PATH，使用 MSVC、禁用 LTO，OneFile 不压缩。构建日志建议保存到被忽略的 `build_cache/logs/`。
+`build.bat` 默认版本为 2.3.0，先构建 StandAlone，再构建 OneFile。它自动把所选 Python 环境的 `Library/bin` 等目录加入 PATH，使用 MSVC、禁用 LTO，OneFile 不压缩。构建日志建议保存到被忽略的 `build_cache/logs/`。
 
 ## 产物与资源
 
-- StandAlone：`CVAnalysis_StandAlone_v2.2.0/start_gui.dist/`，必须整体分发，不能只复制 EXE。
-- OneFile：`CVAnalysis_OneFile_v2.2.0/CVAnalysis_v2.2.0.exe`，启动时解压至系统临时目录的独立子目录。
+- StandAlone：`CVAnalysis_StandAlone_v2.3.0/start_gui.dist/`，必须整体分发，不能只复制 EXE。
+- OneFile：`CVAnalysis_OneFile_v2.3.0/CVAnalysis_v2.3.0.exe`，启动时解压至系统临时目录的独立子目录。
 - 发布附件：StandAlone ZIP、OneFile EXE、`SHA256SUMS.txt`。GitHub 自动提供对应标签的源码 ZIP / tar.gz。
 - 两种模式均嵌入 `cvanalysis/resources/icons/cvanalysis.ico`，并包含主题模板、图标源文件与 PyGlass MIT 许可/改编声明。
 - EXE 未进行代码签名。分发与运行不要求修改系统防护设置。
 
-## v2.2.0 正式发布验证
+## v2.3.0 正式发布验证
+
+- 开发环境（Python 3.13.9）完整回归：603 passed，144.65 s，退出码 0。
+- 打包环境（Python 3.11.14）完整回归：603 passed，149.21 s，退出码 0。
+- StandAlone ZIP：1041 个文件逐字节核对（解压后 340,134,062 bytes），运行时 `config.json` / `themes.json` 未分发；README/LICENSE 已补齐。
+- StandAlone：隔离配置下离屏启动 15 秒，进程存活，`config.json` / `themes.json` 已生成，启动错误日志为空。
+- OneFile：隔离配置下冷启动 30 秒，加载器与子进程均存活，配置/主题已生成，启动错误日志为空。
+
+| 产物 | 字节数 | SHA256 |
+|---|---:|---|
+| StandAlone EXE | 130556416 | `3cf400ca408cdccf0e4f5b15ba9c58a17a99cf6f8013deb0849ba64215c4dbdc` |
+| StandAlone ZIP | 125861945 | `68a7ef38dd85eeb3f2d25949274453dcfd6e8e124c84dd1a478603b26850473f` |
+| OneFile EXE | 340482048 | `fb3c7329116fcbe4f86307806bce2793303ddd81ae2fad5c7b7b99dbf4b8ed81` |
+
+两种 EXE 的 Windows 文件版本为 `2.3.0.0`，均含与源 ICO 一致的 10 个图标尺寸（1 个图标组、10 个 RT_ICON 条目）。
+
+## v2.2.0 正式发布验证（历史）
 
 - 开发环境（Python 3.13.9）完整回归：568 passed，141.41 s，退出码 0。
 - 打包环境（Python 3.11.14）完整回归：568 passed，139.99 s，退出码 0。
@@ -90,4 +106,4 @@ cmd /c build.bat 2.2.0 all
 
 ## 发布顺序
 
-获准发布后，检查差异、隐私文件和完整回归，再构建并验收对应版本。提交源码后核对远端 `main` / `v2` 的快进条件，使用普通推送。新发布创建与版本对应的附注标签，再核对附件下载链接和 SHA-256。既有标签包括 `v2.1.0`、`v2.2.0`，应保留其原始指向。
+获准发布后，检查差异、隐私文件和完整回归，再构建并验收对应版本。提交源码后核对远端 `main` / `v2` 的快进条件，使用普通推送。新发布创建与版本对应的附注标签，再核对附件下载链接和 SHA-256。既有标签包括 `v2.1.0`、`v2.2.0`，本版本为 `v2.3.0`，均应保留其原始指向。
